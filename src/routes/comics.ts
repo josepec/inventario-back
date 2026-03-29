@@ -58,6 +58,8 @@ comics.get('/:id', async (c) => {
 // POST /comics
 comics.post('/', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
+  const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
+  const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
 
   const result = await c.env.DB.prepare(`
     INSERT INTO comics (
@@ -69,17 +71,17 @@ comics.post('/', async (c) => {
       created_at, updated_at
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
-    body['title'] ?? null,
-    body['series'] ?? null, body['number'] ?? null, body['volume'] ?? null,
-    body['isbn'] ?? null, body['ean'] ?? null,
-    body['writer'] ?? null, body['artist'] ?? null, body['colorist'] ?? null, body['cover_artist'] ?? null,
-    body['publisher'] ?? null, body['collection'] ?? null, body['publish_date'] ?? null,
-    body['original_publisher'] ?? null, body['original_title'] ?? null,
-    body['synopsis'] ?? null, body['genre'] ?? null, body['format'] ?? null,
-    body['pages'] ?? null, body['language'] ?? null, body['cover_url'] ?? null,
-    body['read_status'] ?? 'unread',
+    str('title'),
+    str('series'), num('number'), num('volume'),
+    str('isbn'), str('ean'),
+    str('writer'), str('artist'), str('colorist'), str('cover_artist'),
+    str('publisher'), str('collection'), str('publish_date'),
+    str('original_publisher'), str('original_title'),
+    str('synopsis'), str('genre'), str('format'),
+    num('pages'), str('language'), str('cover_url'),
+    str('read_status') ?? 'unread',
     body['owned'] ? 1 : 0,
-    body['rating'] ?? null, body['notes'] ?? null,
+    num('rating'), str('notes'),
     now(), now()
   ).run();
 
@@ -95,6 +97,8 @@ comics.post('/', async (c) => {
 comics.put('/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const body = await c.req.json<Record<string, unknown>>();
+  const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
+  const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
 
   const existing = await c.env.DB
     .prepare('SELECT id FROM comics WHERE id = ?').bind(id).first();
@@ -110,17 +114,17 @@ comics.put('/:id', async (c) => {
       updated_at=?
     WHERE id=?
   `).bind(
-    body['title'] ?? null,
-    body['series'] ?? null, body['number'] ?? null, body['volume'] ?? null,
-    body['isbn'] ?? null, body['ean'] ?? null,
-    body['writer'] ?? null, body['artist'] ?? null, body['colorist'] ?? null, body['cover_artist'] ?? null,
-    body['publisher'] ?? null, body['collection'] ?? null, body['publish_date'] ?? null,
-    body['original_publisher'] ?? null, body['original_title'] ?? null,
-    body['synopsis'] ?? null, body['genre'] ?? null, body['format'] ?? null,
-    body['pages'] ?? null, body['language'] ?? null, body['cover_url'] ?? null,
-    body['read_status'] ?? 'unread',
+    str('title'),
+    str('series'), num('number'), num('volume'),
+    str('isbn'), str('ean'),
+    str('writer'), str('artist'), str('colorist'), str('cover_artist'),
+    str('publisher'), str('collection'), str('publish_date'),
+    str('original_publisher'), str('original_title'),
+    str('synopsis'), str('genre'), str('format'),
+    num('pages'), str('language'), str('cover_url'),
+    str('read_status') ?? 'unread',
     body['owned'] ? 1 : 0,
-    body['rating'] ?? null, body['notes'] ?? null,
+    num('rating'), str('notes'),
     now(), id
   ).run();
 
