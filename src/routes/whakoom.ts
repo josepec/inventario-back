@@ -36,6 +36,9 @@ whakoom.get('/search', async (c) => {
     }
 
     const results = parseSearch(html);
+    if (results.length === 0) {
+      return c.json({ debug: html.slice(0, 2000) }, 200);
+    }
     return c.json(results);
   } catch (err) {
     return c.json({ error: String(err) }, 500);
