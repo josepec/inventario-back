@@ -38,17 +38,21 @@ async function login(user: string, pass: string): Promise<string> {
     .map(c => c.split(';')[0])
     .join('; ');
 
-  // Buscar token CSRF (ASP.NET usa __RequestVerificationToken)
-  const tokenMatch = loginHtml.match(/name="__RequestVerificationToken"[^>]+value="([^"]+)"/i)
-    ?? loginHtml.match(/value="([^"]+)"[^>]+name="__RequestVerificationToken"/i);
-  const csrfToken = tokenMatch ? tokenMatch[1] : '';
+  // Extraer campos ASP.NET WebForms
+  const viewStateMatch = loginHtml.match(/name="__VIEWSTATE"[^>]+value="([^"]+)"/i)
+    ?? loginHtml.match(/id="__VIEWSTATE"[^>]+value="([^"]+)"/i);
+  const viewState = viewStateMatch ? viewStateMatch[1] : '';
+
+  const viewStateGenMatch = loginHtml.match(/name="__VIEWSTATEGENERATOR"[^>]+value="([^"]+)"/i);
+  const viewStateGen = viewStateGenMatch ? viewStateGenMatch[1] : '';
 
   // 2. POST login con credenciales
   const body = new URLSearchParams();
-  if (csrfToken) body.set('__RequestVerificationToken', csrfToken);
-  body.set('UserName', user);
-  body.set('Password', pass);
-  body.set('RememberMe', 'true');
+  if (viewState) body.set('__VIEWSTATE', viewState);
+  if (viewStateGen) body.set('__VIEWSTATEGENERATOR', viewStateGen);
+  body.set('username', user);
+  body.set('userpassw', pass);
+  body.set('remember', 'true');
 
   const loginRes = await fetch('https://www.whakoom.com/login', {
     method: 'POST',
@@ -102,35 +106,6 @@ async function fetchWithAuth(url: string, env: { WHAKOOM_USER: string; WHAKOOM_P
     redirect: 'manual',
   });
 }
-
-// GET /whakoom/debug — temporal para depurar el login
-whakoom.get('/debug', async (c) => {
-  try {
-    const loginPageRes = await fetch('https://www.whakoom.com/login', {
-      headers: BROWSER_HEADERS,
-      redirect: 'manual',
-    });
-
-    const html = await loginPageRes.text();
-    const status = loginPageRes.status;
-    const setCookies = loginPageRes.headers.getAll?.('set-cookie')
-      ?? [loginPageRes.headers.get('set-cookie') ?? ''];
-
-    // Buscar formulario de login
-    const formMatch = html.match(/<form[\s\S]*?<\/form>/i);
-    const inputMatches = [...html.matchAll(/<input[^>]+>/gi)].map(m => m[0]);
-
-    return c.json({
-      status,
-      cookies: setCookies,
-      formSnippet: formMatch ? formMatch[0].slice(0, 2000) : 'NO FORM FOUND',
-      inputs: inputMatches,
-      htmlStart: html.slice(0, 1000),
-    });
-  } catch (err) {
-    return c.json({ error: String(err) }, 500);
-  }
-});
 
 // GET /whakoom/search?q=batman
 whakoom.get('/search', async (c) => {
