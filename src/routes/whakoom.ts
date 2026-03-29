@@ -161,10 +161,13 @@ whakoom.get('/search', async (c) => {
   }
 });
 
-// GET /whakoom/comic/:id
+// GET /whakoom/comic/:id?type=comic|edition
 whakoom.get('/comic/:id', async (c) => {
   const id = c.req.param('id');
-  const url = `https://www.whakoom.com/comics/${id}`;
+  const type = c.req.query('type') ?? 'comic';
+  const url = type === 'edition'
+    ? `https://www.whakoom.com/ediciones/${id}`
+    : `https://www.whakoom.com/comics/${id}`;
 
   try {
     const res = await whakoomFetch(url, c.env);
@@ -185,7 +188,7 @@ whakoom.get('/comic/:id', async (c) => {
 // ── Parsers ───────────────────────────────────────────────────────────────────
 
 function parseSearchResults(html: string) {
-  const results: { id: string; title: string; cover: string | null; publisher: string }[] = [];
+  const results: { id: string; title: string; cover: string | null; publisher: string; type: string }[] = [];
   const seen = new Set<string>();
 
   // Cada resultado de búsqueda es un div.sresult
@@ -195,11 +198,13 @@ function parseSearchResults(html: string) {
     const fragment = block[0];
 
     // Extraer link a /comics/ID o /ediciones/ID
-    const linkMatch = fragment.match(/href="\/comics\/([a-zA-Z0-9]+)[^"]*"/i)
-      ?? fragment.match(/href="\/ediciones\/(\d+)[^"]*"/i);
+    const comicMatch = fragment.match(/href="\/comics\/([a-zA-Z0-9]+)[^"]*"/i);
+    const editionMatch = fragment.match(/href="\/ediciones\/(\d+)[^"]*"/i);
+    const linkMatch = comicMatch ?? editionMatch;
     if (!linkMatch) continue;
 
     const id = linkMatch[1];
+    const type = comicMatch ? 'comic' : 'edition';
     if (seen.has(id)) continue;
     seen.add(id);
 
@@ -217,7 +222,7 @@ function parseSearchResults(html: string) {
     const pubMatch = fragment.match(/class="pub"[^>]*>([^<]+)/i);
     const publisher = pubMatch ? pubMatch[1].trim() : '';
 
-    results.push({ id, title, cover, publisher });
+    results.push({ id, title, cover, publisher, type });
     if (results.length >= 24) break;
   }
 
@@ -243,9 +248,14 @@ function parseComic(html: string, id: string) {
     return m ? m[1].trim() : '';
   };
 
-  // Publisher puede tener tags anidados
+  // Publisher: itemprop, o extraer del og:title "(Editorial)" al final
   const pubMatch = html.match(/itemprop="publisher"[^>]*>([\s\S]*?)<\//i);
-  const publisher = pubMatch ? pubMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  let publisher = pubMatch ? pubMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  if (!publisher) {
+    const ogPubMatch = og('title').match(/\(([^)]+)\)\s*$/);
+    if (ogPubMatch) publisher = ogPubMatch[1];
+  }
+
   const isbn = itemprop('isbn').replace(/-\d+$/, ''); // Quitar sufijo de Whakoom
   const dateRaw = html.match(/itemprop="datePublished"[^>]+content="([^"]+)"/i);
   const date = dateRaw ? dateRaw[1] : '';
@@ -257,7 +267,7 @@ function parseComic(html: string, id: string) {
     m[1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
   );
 
-  // Serie desde itemprop name h1
+  // Serie: itemprop name h1 o fallback a og:title
   const seriesMatch = html.match(/itemprop="name"[^>]*>([\s\S]*?)<\/h1/i);
   let series = '';
   let number = '';
@@ -270,6 +280,8 @@ function parseComic(html: string, id: string) {
     } else {
       series = raw;
     }
+  } else {
+    series = og('title').replace(/\s*\([^)]+\)\s*$/, '');
   }
 
   return {
