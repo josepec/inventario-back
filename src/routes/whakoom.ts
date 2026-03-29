@@ -6,11 +6,10 @@ const whakoom = new Hono<AppContext>();
 
 whakoom.use('*', requireAuth);
 
-const BROWSER_HEADERS = {
+const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-  'Accept-Encoding': 'gzip, deflate, br',
   'Connection': 'keep-alive',
   'Upgrade-Insecure-Requests': '1',
   'Sec-Fetch-Dest': 'document',
@@ -18,6 +17,91 @@ const BROWSER_HEADERS = {
   'Sec-Fetch-Site': 'none',
   'Cache-Control': 'max-age=0',
 };
+
+// Cookie de sesión en memoria (se renueva en cada cold start)
+let sessionCookie = '';
+
+async function login(user: string, pass: string): Promise<string> {
+  // 1. GET login page para obtener cookies y token CSRF
+  const loginPageRes = await fetch('https://www.whakoom.com/login', {
+    headers: BROWSER_HEADERS,
+    redirect: 'manual',
+  });
+
+  const loginHtml = await loginPageRes.text();
+
+  // Recoger cookies iniciales
+  const setCookies = loginPageRes.headers.getAll?.('set-cookie')
+    ?? [loginPageRes.headers.get('set-cookie') ?? ''];
+  let cookies = setCookies
+    .filter(Boolean)
+    .map(c => c.split(';')[0])
+    .join('; ');
+
+  // Buscar token CSRF (ASP.NET usa __RequestVerificationToken)
+  const tokenMatch = loginHtml.match(/name="__RequestVerificationToken"[^>]+value="([^"]+)"/i)
+    ?? loginHtml.match(/value="([^"]+)"[^>]+name="__RequestVerificationToken"/i);
+  const csrfToken = tokenMatch ? tokenMatch[1] : '';
+
+  // 2. POST login con credenciales
+  const body = new URLSearchParams();
+  if (csrfToken) body.set('__RequestVerificationToken', csrfToken);
+  body.set('UserName', user);
+  body.set('Password', pass);
+  body.set('RememberMe', 'true');
+
+  const loginRes = await fetch('https://www.whakoom.com/login', {
+    method: 'POST',
+    headers: {
+      ...BROWSER_HEADERS,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Cookie': cookies,
+      'Sec-Fetch-Site': 'same-origin',
+      'Referer': 'https://www.whakoom.com/login',
+    },
+    body: body.toString(),
+    redirect: 'manual',
+  });
+
+  // 3. Recoger cookies de sesión del response
+  const authCookies = loginRes.headers.getAll?.('set-cookie')
+    ?? [loginRes.headers.get('set-cookie') ?? ''];
+  const allCookies = [...setCookies, ...authCookies]
+    .filter(Boolean)
+    .map(c => c.split(';')[0]);
+
+  // Deduplicar por nombre de cookie
+  const cookieMap = new Map<string, string>();
+  for (const c of allCookies) {
+    const name = c.split('=')[0];
+    cookieMap.set(name, c);
+  }
+
+  return [...cookieMap.values()].join('; ');
+}
+
+async function fetchWithAuth(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }): Promise<Response> {
+  // Intenta con la cookie cacheada
+  if (sessionCookie) {
+    const res = await fetch(url, {
+      headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
+      redirect: 'manual',
+    });
+    const location = res.headers.get('location') ?? '';
+    // Si no redirige al login, la sesión sigue viva
+    if (!location.includes('/login')) {
+      return res;
+    }
+  }
+
+  // Login y reintentar
+  sessionCookie = await login(env.WHAKOOM_USER, env.WHAKOOM_PASS);
+
+  return fetch(url, {
+    headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
+    redirect: 'manual',
+  });
+}
 
 // GET /whakoom/search?q=batman
 whakoom.get('/search', async (c) => {
@@ -27,18 +111,26 @@ whakoom.get('/search', async (c) => {
   const url = `https://www.whakoom.com/search?q=${encodeURIComponent(q)}&type=comics`;
 
   try {
-    const response = await fetch(url, { headers: BROWSER_HEADERS });
-    if (!response.ok) return c.json({ error: `Whakoom devolvió ${response.status}` }, 502);
+    const response = await fetchWithAuth(url, c.env);
 
-    const html = await response.text();
-    if (html.includes('cf-browser-verification') || html.includes('Checking your browser')) {
-      return c.json({ error: 'Cloudflare challenge activo' }, 503);
+    // Si nos redirige, seguir manualmente con cookies
+    let html: string;
+    const location = response.headers.get('location');
+    if (location) {
+      const fullUrl = location.startsWith('http') ? location : `https://www.whakoom.com${location}`;
+      const followRes = await fetch(fullUrl, {
+        headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
+      });
+      html = await followRes.text();
+    } else {
+      html = await response.text();
+    }
+
+    if (html.includes('/login')) {
+      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
     }
 
     const results = parseSearch(html);
-    if (results.length === 0) {
-      return c.json({ debug: html.slice(0, 2000) }, 200);
-    }
     return c.json(results);
   } catch (err) {
     return c.json({ error: String(err) }, 500);
@@ -51,12 +143,22 @@ whakoom.get('/comic/:id', async (c) => {
   const url = `https://www.whakoom.com/comics/${id}`;
 
   try {
-    const response = await fetch(url, { headers: BROWSER_HEADERS });
-    if (!response.ok) return c.json({ error: `Whakoom devolvió ${response.status}` }, 502);
+    const response = await fetchWithAuth(url, c.env);
 
-    const html = await response.text();
-    if (html.includes('cf-browser-verification') || html.includes('Checking your browser')) {
-      return c.json({ error: 'Cloudflare challenge activo' }, 503);
+    let html: string;
+    const location = response.headers.get('location');
+    if (location) {
+      const fullUrl = location.startsWith('http') ? location : `https://www.whakoom.com${location}`;
+      const followRes = await fetch(fullUrl, {
+        headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
+      });
+      html = await followRes.text();
+    } else {
+      html = await response.text();
+    }
+
+    if (html.includes('/login')) {
+      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
     }
 
     const data = parseComic(html, id);
