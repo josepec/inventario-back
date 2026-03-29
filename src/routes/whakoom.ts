@@ -103,6 +103,35 @@ async function fetchWithAuth(url: string, env: { WHAKOOM_USER: string; WHAKOOM_P
   });
 }
 
+// GET /whakoom/debug — temporal para depurar el login
+whakoom.get('/debug', async (c) => {
+  try {
+    const loginPageRes = await fetch('https://www.whakoom.com/login', {
+      headers: BROWSER_HEADERS,
+      redirect: 'manual',
+    });
+
+    const html = await loginPageRes.text();
+    const status = loginPageRes.status;
+    const setCookies = loginPageRes.headers.getAll?.('set-cookie')
+      ?? [loginPageRes.headers.get('set-cookie') ?? ''];
+
+    // Buscar formulario de login
+    const formMatch = html.match(/<form[\s\S]*?<\/form>/i);
+    const inputMatches = [...html.matchAll(/<input[^>]+>/gi)].map(m => m[0]);
+
+    return c.json({
+      status,
+      cookies: setCookies,
+      formSnippet: formMatch ? formMatch[0].slice(0, 2000) : 'NO FORM FOUND',
+      inputs: inputMatches,
+      htmlStart: html.slice(0, 1000),
+    });
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
 // GET /whakoom/search?q=batman
 whakoom.get('/search', async (c) => {
   const q = c.req.query('q') ?? '';
