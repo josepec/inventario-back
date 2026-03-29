@@ -22,7 +22,7 @@ const BROWSER_HEADERS: Record<string, string> = {
 let sessionCookie = '';
 
 async function login(user: string, pass: string): Promise<string> {
-  // 1. GET login page para obtener cookies y token CSRF
+  // 1. GET login page para obtener cookies y __VIEWSTATE
   const loginPageRes = await fetch('https://www.whakoom.com/login', {
     headers: BROWSER_HEADERS,
     redirect: 'manual',
@@ -30,7 +30,6 @@ async function login(user: string, pass: string): Promise<string> {
 
   const loginHtml = await loginPageRes.text();
 
-  // Recoger cookies iniciales
   const setCookies = loginPageRes.headers.getAll?.('set-cookie')
     ?? [loginPageRes.headers.get('set-cookie') ?? ''];
   let cookies = setCookies
@@ -67,14 +66,13 @@ async function login(user: string, pass: string): Promise<string> {
     redirect: 'manual',
   });
 
-  // 3. Recoger cookies de sesión del response
+  // 3. Recoger cookies de sesión
   const authCookies = loginRes.headers.getAll?.('set-cookie')
     ?? [loginRes.headers.get('set-cookie') ?? ''];
   const allCookies = [...setCookies, ...authCookies]
     .filter(Boolean)
     .map(c => c.split(';')[0]);
 
-  // Deduplicar por nombre de cookie
   const cookieMap = new Map<string, string>();
   for (const c of allCookies) {
     const name = c.split('=')[0];
@@ -84,57 +82,79 @@ async function login(user: string, pass: string): Promise<string> {
   return [...cookieMap.values()].join('; ');
 }
 
-async function fetchWithAuth(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }): Promise<Response> {
-  // Intenta con la cookie cacheada
-  if (sessionCookie) {
-    const res = await fetch(url, {
-      headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
-      redirect: 'manual',
-    });
-    const location = res.headers.get('location') ?? '';
-    // Si no redirige al login, la sesión sigue viva
-    if (!location.includes('/login')) {
-      return res;
-    }
+async function ensureSession(env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }): Promise<string> {
+  if (sessionCookie && sessionCookie.includes('.WHAKOOMUSER=') && !sessionCookie.includes('.WHAKOOMUSER=;')) {
+    return sessionCookie;
   }
-
-  // Login y reintentar
   sessionCookie = await login(env.WHAKOOM_USER, env.WHAKOOM_PASS);
+  return sessionCookie;
+}
 
-  return fetch(url, {
-    headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
+async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }, options?: RequestInit): Promise<Response> {
+  let cookie = await ensureSession(env);
+
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      ...BROWSER_HEADERS,
+      ...(options?.headers as Record<string, string> ?? {}),
+      'Cookie': cookie,
+    },
     redirect: 'manual',
   });
+
+  // Si redirige al login, renovar sesión y reintentar
+  const location = res.headers.get('location') ?? '';
+  if (location.includes('/login')) {
+    sessionCookie = '';
+    cookie = await ensureSession(env);
+    return fetch(url, {
+      ...options,
+      headers: {
+        ...BROWSER_HEADERS,
+        ...(options?.headers as Record<string, string> ?? {}),
+        'Cookie': cookie,
+      },
+    });
+  }
+
+  // Si fue redirect a otra página, seguirlo con cookies
+  if (location) {
+    const fullUrl = location.startsWith('http') ? location : `https://www.whakoom.com${location}`;
+    return fetch(fullUrl, {
+      headers: { ...BROWSER_HEADERS, 'Cookie': cookie },
+    });
+  }
+
+  return res;
 }
+
+// ── Endpoints ─────────────────────────────────────────────────────────────────
 
 // GET /whakoom/search?q=batman
 whakoom.get('/search', async (c) => {
   const q = c.req.query('q') ?? '';
   if (!q.trim()) return c.json([]);
 
-  const url = `https://www.whakoom.com/search?q=${encodeURIComponent(q)}&type=comics`;
-
   try {
-    const response = await fetchWithAuth(url, c.env);
+    const cookie = await ensureSession(c.env);
 
-    // Si nos redirige, seguir manualmente con cookies
-    let html: string;
-    const location = response.headers.get('location');
-    if (location) {
-      const fullUrl = location.startsWith('http') ? location : `https://www.whakoom.com${location}`;
-      const followRes = await fetch(fullUrl, {
-        headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
-      });
-      html = await followRes.text();
-    } else {
-      html = await response.text();
-    }
+    const res = await fetch('https://www.whakoom.com/search.aspx/Query', {
+      method: 'POST',
+      headers: {
+        ...BROWSER_HEADERS,
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': cookie,
+        'Referer': `https://www.whakoom.com/search?q=${encodeURIComponent(q)}&type=comics`,
+      },
+      body: JSON.stringify({ q: q.trim(), ft: '0', fit: '', fp: '', fl: '', p: 1 }),
+    });
 
-    if (html.includes('/login')) {
-      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
-    }
+    if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
 
-    const results = parseSearch(html);
+    const json = await res.json<{ d: { itemsCount: number; searchResult: string } }>();
+    const results = parseSearchResults(json.d.searchResult);
     return c.json(results);
   } catch (err) {
     return c.json({ error: String(err) }, 500);
@@ -147,21 +167,11 @@ whakoom.get('/comic/:id', async (c) => {
   const url = `https://www.whakoom.com/comics/${id}`;
 
   try {
-    const response = await fetchWithAuth(url, c.env);
+    const res = await whakoomFetch(url, c.env);
+    if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
 
-    let html: string;
-    const location = response.headers.get('location');
-    if (location) {
-      const fullUrl = location.startsWith('http') ? location : `https://www.whakoom.com${location}`;
-      const followRes = await fetch(fullUrl, {
-        headers: { ...BROWSER_HEADERS, 'Cookie': sessionCookie },
-      });
-      html = await followRes.text();
-    } else {
-      html = await response.text();
-    }
-
-    if (html.includes('/login')) {
+    const html = await res.text();
+    if (html.includes('/login?ReturnUrl')) {
       return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
     }
 
@@ -174,51 +184,97 @@ whakoom.get('/comic/:id', async (c) => {
 
 // ── Parsers ───────────────────────────────────────────────────────────────────
 
+function parseSearchResults(html: string) {
+  const results: { id: string; title: string; cover: string | null; publisher: string }[] = [];
+  const seen = new Set<string>();
+
+  // Cada resultado de búsqueda es un div.sresult
+  const blocks = [...html.matchAll(/<div class="sresult[\s\S]*?(?=<div class="sresult|<div class="sresult-series|$)/gi)];
+
+  for (const block of blocks) {
+    const fragment = block[0];
+
+    // Extraer link a /comics/ID o /ediciones/ID
+    const linkMatch = fragment.match(/href="\/comics\/([a-zA-Z0-9]+)[^"]*"/i)
+      ?? fragment.match(/href="\/ediciones\/(\d+)[^"]*"/i);
+    if (!linkMatch) continue;
+
+    const id = linkMatch[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    // Título
+    const titleMatch = fragment.match(/class="title"[^>]*>\s*<a[^>]*>([^<]+)/i);
+    const title = titleMatch ? titleMatch[1].trim() : id;
+
+    // Portada
+    const imgMatch = fragment.match(/<img[^>]+src="([^"]+)"/i);
+    let cover = imgMatch ? imgMatch[1] : null;
+    // Convertir thumb a versión más grande
+    if (cover) cover = cover.replace('/thumb/', '/small/');
+
+    // Editorial
+    const pubMatch = fragment.match(/class="pub"[^>]*>([^<]+)/i);
+    const publisher = pubMatch ? pubMatch[1].trim() : '';
+
+    results.push({ id, title, cover, publisher });
+    if (results.length >= 24) break;
+  }
+
+  return results;
+}
+
 function parseComic(html: string, id: string) {
+  // og tags
   const og = (prop: string): string => {
-    const m = html.match(new RegExp(`<meta[^>]+property=["']og:${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))
-      || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
+    const m = html.match(new RegExp(`property=["']og:${prop}["'][^>]+content=["']([^"']+)`, 'i'))
+      ?? html.match(new RegExp(`content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
     return m ? m[1].trim() : '';
   };
 
-  const tag = (pattern: RegExp): string => {
-    const m = html.match(pattern);
-    return m ? m[1].replace(/<[^>]+>/g, '').trim() : '';
+  const title = og('title').replace(/\s*\([^)]+\)\s*$/, '') || '';
+  const cover = og('image');
+  const description = og('description');
+
+  // Schema.org itemprop
+  const itemprop = (prop: string): string => {
+    const m = html.match(new RegExp(`itemprop="${prop}"[^>]+content="([^"]+)"`, 'i'))
+      ?? html.match(new RegExp(`itemprop="${prop}"[^>]*>([^<]+)`, 'i'));
+    return m ? m[1].trim() : '';
   };
 
-  const title = og('title') || tag(/<h1[^>]*>(.*?)<\/h1>/s);
-  const cover = og('image');
-  const description = og('description')
-    || tag(/<(?:p|div)[^>]*class=["'][^"']*(?:description|sinopsis)[^"']*["'][^>]*>(.*?)<\/(?:p|div)>/s);
+  // Publisher puede tener tags anidados
+  const pubMatch = html.match(/itemprop="publisher"[^>]*>([\s\S]*?)<\//i);
+  const publisher = pubMatch ? pubMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  const isbn = itemprop('isbn').replace(/-\d+$/, ''); // Quitar sufijo de Whakoom
+  const dateRaw = html.match(/itemprop="datePublished"[^>]+content="([^"]+)"/i);
+  const date = dateRaw ? dateRaw[1] : '';
+  const language = itemprop('inLanguage');
 
-  // Autores
-  const authorMatches = [...html.matchAll(/href=["'][^"']*\/(?:author|autores?)\/[^"']*["'][^>]*>([^<]+)</gi)];
-  const authors = [...new Set(authorMatches.map(m => m[1].trim()).filter(Boolean))];
+  // Autores desde meta books:author
+  const authorUrls = [...html.matchAll(/books:author[^>]+content="[^"]*\/autores\/\d+\/([^"]+)"/gi)];
+  const authors = authorUrls.map(m =>
+    m[1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  );
 
-  // Editorial
-  const publisherMatch = html.match(/href=["'][^"']*\/(?:publisher|editorial)\/[^"']*["'][^>]*>([^<]+)</i);
-  const publisher = publisherMatch ? publisherMatch[1].trim() : '';
-
-  // Fecha
-  const dateMatch = html.match(/(?:datePublished|published_time)["'\s]+content=["']([^"']+)["']/i)
-    || html.match(/<time[^>]+datetime=["']([^"']+)["']/i);
-  const date = dateMatch ? dateMatch[1].slice(0, 10) : '';
-
-  // Serie
-  const seriesMatch = html.match(/href=["'][^"']*\/(?:series|serie)\/[^"']*["'][^>]*>([^<]+)</i);
-  const series = seriesMatch ? seriesMatch[1].trim() : '';
-
-  // Número
-  const numMatch = html.match(/(?:item_number|número|number)[^>]*>[\s#]*(\d+)/i);
-  const number = numMatch ? numMatch[1] : '';
-
-  // ISBN
-  const isbnMatch = html.match(/isbn[^>]*>[\s]*([0-9\-X]{10,17})/i);
-  const isbn = isbnMatch ? isbnMatch[1].replace(/-/g, '') : '';
+  // Serie desde itemprop name h1
+  const seriesMatch = html.match(/itemprop="name"[^>]*>([\s\S]*?)<\/h1/i);
+  let series = '';
+  let number = '';
+  if (seriesMatch) {
+    const raw = seriesMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+    const numPart = raw.match(/#(\d+)\s*$/);
+    if (numPart) {
+      series = raw.replace(/#\d+\s*$/, '').trim();
+      number = numPart[1];
+    } else {
+      series = raw;
+    }
+  }
 
   return {
     id,
-    title,
+    title: title || series + (number ? ` #${number}` : ''),
     cover,
     description,
     authors,
@@ -227,35 +283,9 @@ function parseComic(html: string, id: string) {
     series,
     number,
     isbn,
+    language,
     url: `https://www.whakoom.com/comics/${id}`,
   };
-}
-
-function parseSearch(html: string) {
-  const results: { id: string; title: string; cover: string | null }[] = [];
-  const seen = new Set<string>();
-
-  const matches = [...html.matchAll(/href=["']([^"']*\/comics\/([a-zA-Z0-9]+))[^"']*["'][^>]*>([\s\S]*?)(?=href=|$)/gi)];
-
-  for (const m of matches) {
-    const id = m[2];
-    if (seen.has(id) || id.length < 3) continue;
-    seen.add(id);
-
-    const fragment = m[3];
-    const imgMatch = fragment.match(/<img[^>]+src=["']([^"']+)["']/i);
-    const titleMatch = fragment.match(/<(?:h[1-6]|strong|span)[^>]*>([^<]{3,80})</i);
-
-    results.push({
-      id,
-      title: titleMatch ? titleMatch[1].trim() : id,
-      cover: imgMatch ? imgMatch[1] : null,
-    });
-
-    if (results.length >= 24) break;
-  }
-
-  return results;
 }
 
 export { whakoom };
