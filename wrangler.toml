@@ -1,0 +1,17 @@
+name = "inventario-back"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "inventario"
+database_id = "d30caec6-a877-4b1f-8fdc-b09711340da5"
+
+# Los secrets (JWT_SECRET, ESP32_API_KEY) se gestionan con:
+#   wrangler secret put JWT_SECRET
+#   wrangler secret put ESP32_API_KEY
+# Para desarrollo local se leen de .dev.vars (no commitear)
+
+[dev]
+port = 8787
