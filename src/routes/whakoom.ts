@@ -131,10 +131,11 @@ async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PA
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
 
-// GET /whakoom/search?q=batman
+// GET /whakoom/search?q=batman&page=1
 whakoom.get('/search', async (c) => {
   const q = c.req.query('q') ?? '';
-  if (!q.trim()) return c.json([]);
+  if (!q.trim()) return c.json({ data: [], total: 0, page: 1, hasMore: false });
+  const page = Math.max(1, Number(c.req.query('page') ?? 1));
 
   try {
     const cookie = await ensureSession(c.env);
@@ -148,14 +149,19 @@ whakoom.get('/search', async (c) => {
         'Cookie': cookie,
         'Referer': `https://www.whakoom.com/search?q=${encodeURIComponent(q)}&type=comics`,
       },
-      body: JSON.stringify({ q: q.trim(), ft: '0', fit: '', fp: '', fl: '', p: 1 }),
+      body: JSON.stringify({ q: q.trim(), ft: '0', fit: '', fp: '', fl: '', p: page }),
     });
 
     if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
 
-    const json = await res.json<{ d: { itemsCount: number; searchResult: string } }>();
+    const json = await res.json<{ d: { itemsCount: number; nextPage: number; searchResult: string } }>();
     const results = parseSearchResults(json.d.searchResult);
-    return c.json(results);
+    return c.json({
+      data: results,
+      total: json.d.itemsCount,
+      page,
+      hasMore: json.d.nextPage > page,
+    });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
