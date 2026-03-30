@@ -283,7 +283,7 @@ function parseComic(html: string, id: string) {
     if (ogPubMatch) publisher = ogPubMatch[1];
   }
 
-  const isbn = itemprop('isbn').replace(/-\d+$/, ''); // Quitar sufijo de Whakoom
+  const isbn = itemprop('isbn');
   const dateRaw = html.match(/itemprop="datePublished"[^>]+content="([^"]+)"/i);
   const date = dateRaw ? dateRaw[1] : '';
   const language = itemprop('inLanguage');
