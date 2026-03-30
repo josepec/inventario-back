@@ -24,7 +24,7 @@ collections.get('/', async (c) => {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await paginate<Record<string, unknown>>(
-    c.env.DB, 'collections', where, params, page, limit, 'updated_at DESC'
+    c.env.DB, 'collections', where, params, page, limit, 'title ASC'
   );
 
   return c.json(result);
