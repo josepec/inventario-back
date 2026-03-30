@@ -82,8 +82,8 @@ collections.post('/', async (c) => {
     INSERT INTO collections (
       whakoom_id, whakoom_type, title, publisher, cover_url, total_issues,
       description, url, format, status, edition_details, synopsis,
-      authors, issues, whakoom_synced_at, created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      authors, issues, whakoom_synced_at, tracking, created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)
   `).bind(
     whakoomId,
     str('whakoom_type'),
