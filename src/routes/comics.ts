@@ -47,7 +47,12 @@ comics.get('/', async (c) => {
 comics.get('/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const comic = await c.env.DB
-    .prepare('SELECT * FROM comics WHERE id = ?')
+    .prepare(`
+      SELECT c.*, col.title as collection_name, col.whakoom_id as collection_whakoom_id
+      FROM comics c
+      LEFT JOIN collections col ON c.collection_id = col.id
+      WHERE c.id = ?
+    `)
     .bind(id)
     .first<Record<string, unknown>>();
 

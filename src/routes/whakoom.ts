@@ -191,6 +191,27 @@ whakoom.get('/comic/:id', async (c) => {
   }
 });
 
+// GET /whakoom/edition/:id — obtener info + todos los números de una edición
+whakoom.get('/edition/:id', async (c) => {
+  const id = c.req.param('id');
+
+  try {
+    // Fetch la página "todos" que lista todos los issues
+    const res = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, c.env);
+    if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
+
+    const html = await res.text();
+    if (html.includes('/login?ReturnUrl')) {
+      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
+    }
+
+    const data = parseEdition(html, id);
+    return c.json(data);
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
 // ── Parsers ───────────────────────────────────────────────────────────────────
 
 function parseSearchResults(html: string) {
@@ -303,6 +324,71 @@ function parseComic(html: string, id: string) {
     isbn,
     language,
     url: `https://www.whakoom.com/comics/${id}`,
+  };
+}
+
+function parseEdition(html: string, id: string) {
+  // Header info
+  const titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+  const title = titleMatch ? titleMatch[1].trim() : '';
+
+  const pubMatch = html.match(/class="publisher"[^>]*>\s*<a[^>]*>([^<]+)/i);
+  const publisher = pubMatch ? pubMatch[1].trim() : '';
+
+  const issuesCountMatch = html.match(/(\d+)\s*cómics/i);
+  const totalIssues = issuesCountMatch ? Number(issuesCountMatch[1]) : 0;
+
+  const typeMatch = html.match(/class="edition-type"[^>]*>([^<]+)/i);
+  const format = typeMatch ? typeMatch[1].trim() : '';
+
+  const statusMatch = html.match(/class="status\s*[^"]*"[^>]*>([^<]+)/i);
+  const status = statusMatch ? statusMatch[1].trim() : '';
+
+  const coverMatch = html.match(/data-item-img="([^"]+)"/i);
+  const cover = coverMatch ? coverMatch[1] : '';
+
+  // og:description
+  const descMatch = html.match(/og:description["'][^>]+content=["']([^"']+)/i)
+    ?? html.match(/content=["']([^"']+)["'][^>]+og:description/i);
+  const description = descMatch ? descMatch[1].trim() : '';
+
+  // Parse issues from v2-cover-list
+  const issues: { id: string; number: number; title: string; subtitle: string; cover: string }[] = [];
+  const issueBlocks = [...html.matchAll(/<li[^>]*id="comic([^"]+)"[^>]*>[\s\S]*?<\/li>/gi)];
+
+  for (const block of issueBlocks) {
+    const fragment = block[0];
+    const comicId = block[1];
+
+    const numMatch = fragment.match(/class="issue-number"[^>]*>#(\d+)/i);
+    const num = numMatch ? Number(numMatch[1]) : 0;
+
+    const titleM = fragment.match(/title="([^"]+)"/i);
+    const issueTitle = titleM ? titleM[1].trim() : '';
+
+    const subtitleM = fragment.match(/<span class="title">\s*([^<]+)/i);
+    const subtitle = subtitleM ? subtitleM[1].trim() : '';
+
+    const imgM = fragment.match(/<img[^>]+src="([^"]+)"/i);
+    const issueCover = imgM ? imgM[1] : '';
+
+    issues.push({ id: comicId, number: num, title: issueTitle, subtitle, cover: issueCover });
+  }
+
+  // Sort by number ascending
+  issues.sort((a, b) => a.number - b.number);
+
+  return {
+    id,
+    title,
+    publisher,
+    totalIssues,
+    format,
+    status,
+    cover,
+    description,
+    issues,
+    url: `https://www.whakoom.com/ediciones/${id}`,
   };
 }
 
