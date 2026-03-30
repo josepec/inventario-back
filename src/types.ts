@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  COVERS: R2Bucket;
   JWT_SECRET: string;
   ESP32_API_KEY: string;
   WHAKOOM_USER: string;

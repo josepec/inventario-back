@@ -13,5 +13,9 @@ database_id = "d30caec6-a877-4b1f-8fdc-b09711340da5"
 #   wrangler secret put ESP32_API_KEY
 # Para desarrollo local se leen de .dev.vars (no commitear)
 
+[[r2_buckets]]
+binding = "COVERS"
+bucket_name = "inventario-covers"
+
 [dev]
 port = 8787

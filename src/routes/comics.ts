@@ -68,8 +68,9 @@ comics.post('/', async (c) => {
       publisher, collection, publish_date, original_publisher, original_title,
       synopsis, genre, format, pages, language, cover_url,
       read_status, owned, rating, notes,
+      collection_id,
       created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
     str('title'),
     str('series'), num('number'), num('volume'),
@@ -82,6 +83,7 @@ comics.post('/', async (c) => {
     str('read_status') ?? 'unread',
     body['owned'] ? 1 : 0,
     num('rating'), str('notes'),
+    num('collection_id'),
     now(), now()
   ).run();
 
@@ -111,6 +113,7 @@ comics.put('/:id', async (c) => {
       publisher=?, collection=?, publish_date=?, original_publisher=?, original_title=?,
       synopsis=?, genre=?, format=?, pages=?, language=?, cover_url=?,
       read_status=?, owned=?, rating=?, notes=?,
+      collection_id=?,
       updated_at=?
     WHERE id=?
   `).bind(
@@ -125,6 +128,7 @@ comics.put('/:id', async (c) => {
     str('read_status') ?? 'unread',
     body['owned'] ? 1 : 0,
     num('rating'), str('notes'),
+    num('collection_id'),
     now(), id
   ).run();
 
