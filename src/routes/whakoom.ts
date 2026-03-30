@@ -347,18 +347,51 @@ function parseEdition(html: string, id: string) {
   const coverMatch = html.match(/data-item-img="([^"]+)"/i);
   const cover = coverMatch ? coverMatch[1] : '';
 
-  // og:description
+  // "Sobre esta edición" → edition details (format, size, etc.)
+  const aboutMatch = html.match(/<h2[^>]*class="about-edition"[^>]*>[^<]*<\/h2>\s*<p>([^<]+)<\/p>/i);
+  const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
+
+  // Argumento (synopsis)
+  const argMatch = html.match(/<h2>Argumento<\/h2>\s*<p>([\s\S]*?)<\/p>/i);
+  let synopsis = '';
+  if (argMatch && !argMatch[1].includes('No conocemos el argumento')) {
+    synopsis = argMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+  }
+
+  // og:description as fallback
   const descMatch = html.match(/og:description["'][^>]+content=["']([^"']+)/i)
     ?? html.match(/content=["']([^"']+)["'][^>]+og:description/i);
-  const description = descMatch ? descMatch[1].trim() : '';
+  const description = synopsis || (descMatch ? descMatch[1].trim() : '');
+
+  // Autores
+  const parseAuthors = (block: string): { name: string; role: string }[] => {
+    const authors: { name: string; role: string }[] = [];
+    const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:&nbsp;\(([^)]+)\))?/gi;
+    let m;
+    while ((m = re.exec(block)) !== null) {
+      authors.push({ name: m[1].trim(), role: m[2]?.trim() ?? '' });
+    }
+    return authors;
+  };
+
+  const authorsBlock = html.match(/<h3[^>]*class="autores"[^>]*>Autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
+  const otherAuthorsBlock = html.match(/<h3[^>]*class="more-authors"[^>]*>Otros autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
+  const authors = [
+    ...parseAuthors(authorsBlock ? authorsBlock[1] : ''),
+    ...parseAuthors(otherAuthorsBlock ? otherAuthorsBlock[1] : ''),
+  ];
 
   // Parse issues from v2-cover-list
-  const issues: { id: string; number: number; title: string; subtitle: string; cover: string }[] = [];
+  const issues: { id: string; number: number; title: string; subtitle: string; cover: string; published: boolean; releaseDate: string | null }[] = [];
   const issueBlocks = [...html.matchAll(/<li[^>]*id="comic([^"]+)"[^>]*>[\s\S]*?<\/li>/gi)];
 
   for (const block of issueBlocks) {
     const fragment = block[0];
     const comicId = block[1];
+
+    // Detect not-published class on the li element
+    const liTag = fragment.match(/<li[^>]*>/i)?.[0] ?? '';
+    const published = !liTag.includes('not-published');
 
     const numMatch = fragment.match(/class="issue-number"[^>]*>#(\d+)/i);
     const num = numMatch ? Number(numMatch[1]) : 0;
@@ -372,7 +405,12 @@ function parseEdition(html: string, id: string) {
     const imgM = fragment.match(/<img[^>]+src="([^"]+)"/i);
     const issueCover = imgM ? imgM[1] : '';
 
-    issues.push({ id: comicId, number: num, title: issueTitle, subtitle, cover: issueCover });
+    // Extract release date if present (usually shown for not-published items)
+    const dateM = fragment.match(/class="release-date"[^>]*>([^<]+)/i)
+      ?? fragment.match(/class="date"[^>]*>([^<]+)/i);
+    const releaseDate = dateM ? dateM[1].trim() : null;
+
+    issues.push({ id: comicId, number: num, title: issueTitle, subtitle, cover: issueCover, published, releaseDate });
   }
 
   // Sort by number ascending
@@ -387,6 +425,9 @@ function parseEdition(html: string, id: string) {
     status,
     cover,
     description,
+    editionDetails,
+    synopsis,
+    authors,
     issues,
     url: `https://www.whakoom.com/ediciones/${id}`,
   };

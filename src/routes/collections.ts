@@ -7,6 +7,15 @@ const collections = new Hono<AppContext>();
 
 collections.use('*', requireAuth);
 
+function parseCol(r: Record<string, unknown>) {
+  return {
+    ...r,
+    tracking: r['tracking'] === 1,
+    authors: r['authors'] ? JSON.parse(r['authors'] as string) : [],
+    issues: r['issues'] ? JSON.parse(r['issues'] as string) : [],
+  };
+}
+
 // GET /collections — listado paginado
 collections.get('/', async (c) => {
   const page  = Math.max(1, Number(c.req.query('page') ?? 1));
@@ -27,6 +36,7 @@ collections.get('/', async (c) => {
     c.env.DB, 'collections', where, params, page, limit, 'title ASC'
   );
 
+  result.data = result.data.map(parseCol);
   return c.json(result);
 });
 
@@ -45,7 +55,7 @@ collections.get('/:id', async (c) => {
     .bind(id)
     .all<Record<string, unknown>>();
 
-  return c.json({ ...col, comics: comics.results.map(r => ({ ...r, owned: r['owned'] === 1 })) });
+  return c.json({ ...parseCol(col), comics: comics.results.map(r => ({ ...r, owned: r['owned'] === 1 })) });
 });
 
 // POST /collections
@@ -53,6 +63,7 @@ collections.post('/', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
   const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
   const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
+  const json = (key: string) => { const v = body[key]; return v == null ? null : JSON.stringify(v); };
 
   // Upsert por whakoom_id si existe
   const whakoomId = str('whakoom_id');
@@ -68,8 +79,11 @@ collections.post('/', async (c) => {
   }
 
   const result = await c.env.DB.prepare(`
-    INSERT INTO collections (whakoom_id, whakoom_type, title, publisher, cover_url, total_issues, description, url, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)
+    INSERT INTO collections (
+      whakoom_id, whakoom_type, title, publisher, cover_url, total_issues,
+      description, url, format, status, edition_details, synopsis,
+      authors, issues, whakoom_synced_at, created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
     whakoomId,
     str('whakoom_type'),
@@ -79,15 +93,22 @@ collections.post('/', async (c) => {
     num('total_issues'),
     str('description'),
     str('url'),
+    str('format'),
+    str('status'),
+    str('edition_details'),
+    str('synopsis'),
+    json('authors'),
+    json('issues'),
+    str('whakoom_synced_at'),
     now(), now()
   ).run();
 
   const col = await c.env.DB
     .prepare('SELECT * FROM collections WHERE id = ?')
     .bind(result.meta.last_row_id)
-    .first();
+    .first<Record<string, unknown>>();
 
-  return c.json(col, 201);
+  return c.json(parseCol(col!), 201);
 });
 
 // PUT /collections/:id
@@ -96,14 +117,22 @@ collections.put('/:id', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
   const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
   const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
+  const json = (key: string) => { const v = body[key]; return v == null ? null : JSON.stringify(v); };
 
   const existing = await c.env.DB
     .prepare('SELECT id FROM collections WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ error: 'No encontrada' }, 404);
 
+  const tracking = body['tracking'] != null ? (body['tracking'] ? 1 : 0) : null;
+
   await c.env.DB.prepare(`
     UPDATE collections SET
-      title=?, publisher=?, cover_url=?, total_issues=?, description=?, url=?, updated_at=?
+      title=?, publisher=?, cover_url=?, total_issues=?, description=?, url=?,
+      format=COALESCE(?,format), status=COALESCE(?,status),
+      edition_details=COALESCE(?,edition_details), synopsis=COALESCE(?,synopsis),
+      authors=COALESCE(?,authors), issues=COALESCE(?,issues),
+      whakoom_synced_at=COALESCE(?,whakoom_synced_at),
+      tracking=COALESCE(?,tracking), updated_at=?
     WHERE id=?
   `).bind(
     str('title') ?? 'Sin título',
@@ -112,23 +141,31 @@ collections.put('/:id', async (c) => {
     num('total_issues'),
     str('description'),
     str('url'),
+    str('format'),
+    str('status'),
+    str('edition_details'),
+    str('synopsis'),
+    json('authors'),
+    json('issues'),
+    str('whakoom_synced_at'),
+    tracking,
     now(), id
   ).run();
 
   const col = await c.env.DB
-    .prepare('SELECT * FROM collections WHERE id = ?').bind(id).first();
-  return c.json(col);
+    .prepare('SELECT * FROM collections WHERE id = ?').bind(id).first<Record<string, unknown>>();
+  return c.json(parseCol(col!));
 });
 
-// DELETE /collections/:id
+// DELETE /collections/:id — cascade: elimina también los comics asociados
 collections.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const existing = await c.env.DB
     .prepare('SELECT id FROM collections WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ error: 'No encontrada' }, 404);
 
-  // Desvincular comics
-  await c.env.DB.prepare('UPDATE comics SET collection_id = NULL WHERE collection_id = ?').bind(id).run();
+  // Borrar comics asociados y luego la colección
+  await c.env.DB.prepare('DELETE FROM comics WHERE collection_id = ?').bind(id).run();
   await c.env.DB.prepare('DELETE FROM collections WHERE id = ?').bind(id).run();
   return c.json({ ok: true });
 });
