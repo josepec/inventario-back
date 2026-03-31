@@ -256,18 +256,26 @@ function parseSearchResults(html: string) {
   return results;
 }
 
-function extractEditionFields(text: string): { pages: number | null; binding: string | null; price: number | null } {
-  const pagesMatch = text.match(/(\d+)\s*pp/i);
-  const pages = pagesMatch ? Number(pagesMatch[1]) : null;
+function extractEditionFields(section: string, fullHtml?: string): { pages: number | null; binding: string | null; price: number | null } {
+  // Search in the specific section first, then fall back to the full HTML
+  const searchIn = (text: string) => ({
+    pages: text.match(/(\d+)\s*pp\b/i),
+    binding: text.match(/\b(Cart[oó]n[eé]|Grapa|R[uú]stica|Tapa\s+dura|Tapa\s+blanda|Bolsillo|Lujo)\b/i),
+    price: text.match(/PVP\s*([\d]+(?:[,.][\d]+)?)\s*€/i),
+  });
 
-  const bindingMatch = text.match(/\b(Cart[oó]n[eé]|Grapa|R[uú]stica|Tapa\s+dura|Tapa\s+blanda|Bolsillo|Lujo)\b/i);
-  const binding = bindingMatch ? bindingMatch[1] : null;
+  const s = searchIn(section);
+  const fb = fullHtml ? searchIn(fullHtml) : { pages: null, binding: null, price: null };
 
-  const priceMatch = text.match(/PVP\s*([\d]+(?:[,.][\d]+)?)\s*€/i)
-    ?? text.match(/([\d]+(?:[,.][\d]+)?)\s*€/i);
-  const price = priceMatch ? Number(priceMatch[1].replace(',', '.')) : null;
+  const pagesMatch = s.pages ?? fb.pages;
+  const bindingMatch = s.binding ?? fb.binding;
+  const priceMatch = s.price ?? fb.price;
 
-  return { pages, binding, price };
+  return {
+    pages: pagesMatch ? Number(pagesMatch[1]) : null,
+    binding: bindingMatch ? bindingMatch[1] : null,
+    price: priceMatch ? Number(priceMatch[1].replace(',', '.')) : null,
+  };
 }
 
 function parseComic(html: string, id: string) {
@@ -306,7 +314,7 @@ function parseComic(html: string, id: string) {
   const aboutMatch = html.match(/<h2[^>]*class="about-edition"[^>]*>[^<]*<\/h2>\s*<p>([^<]+)<\/p>/i)
     ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i);
   const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
-  const { pages, binding, price } = extractEditionFields(editionDetails);
+  const { pages, binding, price } = extractEditionFields(editionDetails, html);
 
   // Autores desde meta books:author
   const authorUrls = [...html.matchAll(/books:author[^>]+content="[^"]*\/autores\/\d+\/([^"]+)"/gi)];
@@ -373,7 +381,7 @@ function parseEdition(html: string, id: string) {
   // "Sobre esta edición" → edition details (format, size, etc.)
   const aboutMatch = html.match(/<h2[^>]*class="about-edition"[^>]*>[^<]*<\/h2>\s*<p>([^<]+)<\/p>/i);
   const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
-  const { pages: editionPages, binding: editionBinding, price: editionPrice } = extractEditionFields(editionDetails);
+  const { pages: editionPages, binding: editionBinding, price: editionPrice } = extractEditionFields(editionDetails, html);
 
   // Argumento (synopsis)
   const argMatch = html.match(/<h2>Argumento<\/h2>\s*<p>([\s\S]*?)<\/p>/i);
