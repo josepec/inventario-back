@@ -78,6 +78,20 @@ collections.post('/', async (c) => {
     }
   }
 
+  // Sin whakoom_id: evitar duplicados por título
+  if (!whakoomId) {
+    const title = str('title');
+    if (title) {
+      const existing = await c.env.DB
+        .prepare('SELECT id FROM collections WHERE title = ? AND whakoom_id IS NULL')
+        .bind(title)
+        .first<{ id: number }>();
+      if (existing) {
+        return c.json({ id: existing.id, existed: true });
+      }
+    }
+  }
+
   const result = await c.env.DB.prepare(`
     INSERT INTO collections (
       whakoom_id, whakoom_type, title, publisher, cover_url, total_issues,
