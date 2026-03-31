@@ -209,8 +209,10 @@ whakoom.get('/edition/:id', async (c) => {
     const slugMatch = baseHtml.match(new RegExp(`ediciones/${id}/([a-z0-9_]+)`, 'i'));
     const slug = slugMatch ? slugMatch[1] : '';
 
-    // 3. Fetch /todos con slug para obtener todos los issues
-    let html = baseHtml;
+    // 3. Parsear info base (autores, sinopsis, detalles edición)
+    const data = parseEdition(baseHtml, id);
+
+    // 4. Fetch /todos con slug para obtener todos los issues
     if (slug) {
       try {
         const todosRes = await whakoomFetch(
@@ -219,13 +221,15 @@ whakoom.get('/edition/:id', async (c) => {
         if (todosRes.ok) {
           const todosHtml = await todosRes.text();
           if (!todosHtml.includes('/login?ReturnUrl')) {
-            html = todosHtml;
+            const todosData = parseEdition(todosHtml, id);
+            if (todosData.issues.length > data.issues.length) {
+              data.issues = todosData.issues;
+            }
           }
         }
-      } catch { /* usar baseHtml como fallback */ }
+      } catch { /* usar issues de baseHtml como fallback */ }
     }
 
-    const data = parseEdition(html, id);
     return c.json(data);
   } catch (err) {
     return c.json({ error: String(err) }, 500);
