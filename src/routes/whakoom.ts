@@ -196,19 +196,33 @@ whakoom.get('/edition/:id', async (c) => {
   const id = c.req.param('id');
 
   try {
-    // Intentar primero /todos para obtener todos los issues
-    let res = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}/todos`, c.env);
+    // 1. Fetch la página base para obtener el slug
+    const baseRes = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, c.env);
+    if (!baseRes.ok) return c.json({ error: `Whakoom devolvió ${baseRes.status}` }, 502);
 
-    // Si /todos no existe (404 o redirige), usar la página principal
-    if (!res.ok || res.redirected) {
-      res = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, c.env);
+    const baseHtml = await baseRes.text();
+    if (baseHtml.includes('/login?ReturnUrl')) {
+      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
     }
 
-    if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
+    // 2. Extraer slug de la URL canónica (ediciones/ID/slug)
+    const slugMatch = baseHtml.match(new RegExp(`ediciones/${id}/([a-z0-9_]+)`, 'i'));
+    const slug = slugMatch ? slugMatch[1] : '';
 
-    const html = await res.text();
-    if (html.includes('/login?ReturnUrl')) {
-      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
+    // 3. Fetch /todos con slug para obtener todos los issues
+    let html = baseHtml;
+    if (slug) {
+      try {
+        const todosRes = await whakoomFetch(
+          `https://www.whakoom.com/ediciones/${id}/${slug}/todos`, c.env
+        );
+        if (todosRes.ok) {
+          const todosHtml = await todosRes.text();
+          if (!todosHtml.includes('/login?ReturnUrl')) {
+            html = todosHtml;
+          }
+        }
+      } catch { /* usar baseHtml como fallback */ }
     }
 
     const data = parseEdition(html, id);
