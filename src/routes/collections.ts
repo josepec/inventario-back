@@ -104,6 +104,25 @@ collections.post('/', async (c) => {
         .bind(title)
         .first<{ id: number }>();
       if (existing) {
+        // Actualizar con datos nuevos (puede venir con más info que la primera vez)
+        await c.env.DB.prepare(`
+          UPDATE collections SET
+            whakoom_id=COALESCE(?,whakoom_id), whakoom_type=COALESCE(?,whakoom_type),
+            publisher=COALESCE(?,publisher), cover_url=COALESCE(?,cover_url),
+            total_issues=COALESCE(?,total_issues),
+            description=COALESCE(?,description), url=COALESCE(?,url),
+            format=COALESCE(?,format), status=COALESCE(?,status),
+            edition_details=COALESCE(?,edition_details), synopsis=COALESCE(?,synopsis),
+            authors=COALESCE(?,authors), issues=COALESCE(?,issues),
+            updated_at=?
+          WHERE id=?
+        `).bind(
+          str('whakoom_id'), str('whakoom_type'),
+          str('publisher'), str('cover_url'), num('total_issues'),
+          str('description'), str('url'), str('format'), str('status'),
+          str('edition_details'), str('synopsis'), json('authors'), json('issues'),
+          now(), existing.id
+        ).run();
         return c.json({ id: existing.id, existed: true });
       }
     }
