@@ -196,8 +196,14 @@ whakoom.get('/edition/:id', async (c) => {
   const id = c.req.param('id');
 
   try {
-    // Fetch la página "todos" que lista todos los issues
-    const res = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, c.env);
+    // Intentar primero /todos para obtener todos los issues
+    let res = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}/todos`, c.env);
+
+    // Si /todos no existe (404 o redirige), usar la página principal
+    if (!res.ok || res.redirected) {
+      res = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, c.env);
+    }
+
     if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
 
     const html = await res.text();
