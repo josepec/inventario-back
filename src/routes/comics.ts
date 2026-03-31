@@ -66,6 +66,58 @@ comics.post('/', async (c) => {
   const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
   const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
 
+  // Upsert: buscar duplicado por ISBN o por título+colección
+  const isbn = str('isbn');
+  const title = str('title');
+  const collectionId = num('collection_id');
+  let existing: { id: number } | null = null;
+
+  if (isbn) {
+    existing = await c.env.DB
+      .prepare('SELECT id FROM comics WHERE isbn = ?').bind(isbn).first<{ id: number }>();
+  }
+  if (!existing && title && collectionId) {
+    existing = await c.env.DB
+      .prepare('SELECT id FROM comics WHERE title = ? AND collection_id = ?')
+      .bind(title, collectionId).first<{ id: number }>();
+  }
+
+  if (existing) {
+    // Actualizar datos del cómic existente (preservar estado personal)
+    await c.env.DB.prepare(`
+      UPDATE comics SET
+        title=?, series=?, number=COALESCE(?,number), volume=COALESCE(?,volume),
+        isbn=COALESCE(?,isbn), ean=COALESCE(?,ean),
+        writer=COALESCE(?,writer), artist=COALESCE(?,artist),
+        colorist=COALESCE(?,colorist), cover_artist=COALESCE(?,cover_artist),
+        publisher=COALESCE(?,publisher), collection=COALESCE(?,collection),
+        publish_date=COALESCE(?,publish_date), original_publisher=COALESCE(?,original_publisher),
+        original_title=COALESCE(?,original_title),
+        synopsis=COALESCE(?,synopsis), genre=COALESCE(?,genre), format=COALESCE(?,format),
+        pages=COALESCE(?,pages), language=COALESCE(?,language),
+        cover_url=COALESCE(?,cover_url),
+        collection_id=COALESCE(?,collection_id),
+        price=COALESCE(?,price), binding=COALESCE(?,binding),
+        updated_at=?
+      WHERE id=?
+    `).bind(
+      str('title'),
+      str('series'), num('number'), num('volume'),
+      str('isbn'), str('ean'),
+      str('writer'), str('artist'), str('colorist'), str('cover_artist'),
+      str('publisher'), str('collection'), str('publish_date'),
+      str('original_publisher'), str('original_title'),
+      str('synopsis'), str('genre'), str('format'),
+      num('pages'), str('language'), str('cover_url'),
+      num('collection_id'), num('price'), str('binding'),
+      now(), existing.id
+    ).run();
+
+    const comic = await c.env.DB
+      .prepare('SELECT * FROM comics WHERE id = ?').bind(existing.id).first<Record<string, unknown>>();
+    return c.json({ ...comic, owned: comic?.['owned'] === 1 });
+  }
+
   const result = await c.env.DB.prepare(`
     INSERT INTO comics (
       title, series, number, volume, isbn, ean,

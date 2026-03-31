@@ -74,6 +74,23 @@ collections.post('/', async (c) => {
       .first<{ id: number }>();
 
     if (existing) {
+      // Siempre actualizar con los datos más recientes de Whakoom
+      await c.env.DB.prepare(`
+        UPDATE collections SET
+          title=COALESCE(?,title), publisher=COALESCE(?,publisher),
+          cover_url=COALESCE(?,cover_url), total_issues=COALESCE(?,total_issues),
+          description=?, url=COALESCE(?,url),
+          format=?, status=?,
+          edition_details=?, synopsis=?,
+          authors=?, issues=?,
+          updated_at=?
+        WHERE id=?
+      `).bind(
+        str('title'), str('publisher'), str('cover_url'), num('total_issues'),
+        str('description'), str('url'), str('format'), str('status'),
+        str('edition_details'), str('synopsis'), json('authors'), json('issues'),
+        now(), existing.id
+      ).run();
       return c.json({ id: existing.id, whakoom_id: whakoomId, existed: true });
     }
   }
