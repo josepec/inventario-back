@@ -343,7 +343,7 @@ function parseComic(html: string, id: string) {
   // Autores con roles desde la sección <h3 class="autores">
   const parseAuthors = (block: string): { name: string; role: string }[] => {
     const result: { name: string; role: string }[] = [];
-    const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:&nbsp;\(([^)]+)\))?/gi;
+    const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:(?:&nbsp;|\s)\(([^)]+)\))?/gi;
     let m;
     while ((m = re.exec(block)) !== null) {
       result.push({ name: m[1].trim(), role: m[2]?.trim() ?? '' });
@@ -351,8 +351,8 @@ function parseComic(html: string, id: string) {
     return result;
   };
 
-  const authorsBlock = html.match(/<h3[^>]*class="autores"[^>]*>Autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
-  const otherAuthorsBlock = html.match(/<h3[^>]*class="more-authors"[^>]*>Otros autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
+  const authorsBlock = html.match(/<h3[^>]*>Autores<\/h3>\s*<p[^>]*>([\s\S]*?)<\/p>/i);
+  const otherAuthorsBlock = html.match(/<h3[^>]*>Otros autores<\/h3>\s*<p[^>]*>([\s\S]*?)<\/p>/i);
   let structuredAuthors = [
     ...parseAuthors(authorsBlock ? authorsBlock[1] : ''),
     ...parseAuthors(otherAuthorsBlock ? otherAuthorsBlock[1] : ''),
@@ -446,7 +446,7 @@ function parseEdition(html: string, id: string) {
   // Autores
   const parseAuthors = (block: string): { name: string; role: string }[] => {
     const authors: { name: string; role: string }[] = [];
-    const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:&nbsp;\(([^)]+)\))?/gi;
+    const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:(?:&nbsp;|\s)\(([^)]+)\))?/gi;
     let m;
     while ((m = re.exec(block)) !== null) {
       authors.push({ name: m[1].trim(), role: m[2]?.trim() ?? '' });
@@ -454,8 +454,8 @@ function parseEdition(html: string, id: string) {
     return authors;
   };
 
-  const authorsBlock = html.match(/<h3[^>]*class="autores"[^>]*>Autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
-  const otherAuthorsBlock = html.match(/<h3[^>]*class="more-authors"[^>]*>Otros autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
+  const authorsBlock = html.match(/<h3[^>]*>Autores<\/h3>\s*<p[^>]*>([\s\S]*?)<\/p>/i);
+  const otherAuthorsBlock = html.match(/<h3[^>]*>Otros autores<\/h3>\s*<p[^>]*>([\s\S]*?)<\/p>/i);
   const authors = [
     ...parseAuthors(authorsBlock ? authorsBlock[1] : ''),
     ...parseAuthors(otherAuthorsBlock ? otherAuthorsBlock[1] : ''),
