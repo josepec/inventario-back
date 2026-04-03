@@ -7,6 +7,37 @@ const comics = new Hono<AppContext>();
 
 comics.use('*', requireAuth);
 
+// GET /comics/facets — valores distintos para filtros
+comics.get('/facets', async (c) => {
+  const [authors, publishers, priceRange] = await Promise.all([
+    c.env.DB.prepare(
+      "SELECT DISTINCT json_extract(value, '$.name') as name FROM comics, json_each(comics.authors) WHERE json_extract(value, '$.name') IS NOT NULL ORDER BY name"
+    ).all<{ name: string }>(),
+    c.env.DB.prepare(
+      "SELECT DISTINCT publisher FROM comics WHERE publisher IS NOT NULL AND publisher != '' ORDER BY publisher"
+    ).all<{ publisher: string }>(),
+    c.env.DB.prepare(
+      "SELECT MIN(price) as min_price, MAX(price) as max_price FROM comics WHERE price IS NOT NULL"
+    ).first<{ min_price: number; max_price: number }>(),
+  ]);
+
+  // Fallback: also include writer/artist for comics without structured authors
+  const legacyAuthors = await c.env.DB.prepare(
+    "SELECT DISTINCT writer as name FROM comics WHERE writer IS NOT NULL AND writer != '' AND authors IS NULL UNION SELECT DISTINCT artist as name FROM comics WHERE artist IS NOT NULL AND artist != '' AND authors IS NULL ORDER BY name"
+  ).all<{ name: string }>();
+
+  const allAuthors = [...new Set([
+    ...authors.results.map(r => r.name),
+    ...legacyAuthors.results.map(r => r.name),
+  ])].sort();
+
+  return c.json({
+    authors: allAuthors,
+    publishers: publishers.results.map(r => r.publisher),
+    price: { min: priceRange?.min_price ?? 0, max: priceRange?.max_price ?? 100 },
+  });
+});
+
 // GET /comics — listado paginado con filtros
 comics.get('/', async (c) => {
   const page  = Math.max(1, Number(c.req.query('page') ?? 1));
@@ -16,8 +47,12 @@ comics.get('/', async (c) => {
   const owned       = c.req.query('owned') ?? '';
   const sort        = c.req.query('sort') ?? 'created_at';
   const order       = c.req.query('order') === 'asc' ? 'ASC' : 'DESC';
+  const author      = c.req.query('author') ?? '';
+  const publisher   = c.req.query('publisher') ?? '';
+  const price_min   = c.req.query('price_min') ?? '';
+  const price_max   = c.req.query('price_max') ?? '';
 
-  const allowedSort = ['created_at', 'updated_at', 'title', 'series', 'number', 'publish_date'];
+  const allowedSort = ['created_at', 'updated_at', 'title', 'series', 'number', 'publish_date', 'price'];
   const safeSort = allowedSort.includes(sort) ? sort : 'created_at';
 
   const conditions: string[] = [];
@@ -30,6 +65,13 @@ comics.get('/', async (c) => {
   }
   if (read_status) { conditions.push('read_status = ?'); params.push(read_status); }
   if (owned !== '') { conditions.push('owned = ?'); params.push(owned === 'true' ? 1 : 0); }
+  if (author) {
+    conditions.push("(EXISTS (SELECT 1 FROM json_each(authors) WHERE json_extract(value, '$.name') = ?) OR writer = ? OR artist = ?)");
+    params.push(author, author, author);
+  }
+  if (publisher) { conditions.push('publisher = ?'); params.push(publisher); }
+  if (price_min) { conditions.push('price >= ?'); params.push(Number(price_min)); }
+  if (price_max) { conditions.push('price <= ?'); params.push(Number(price_max)); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 

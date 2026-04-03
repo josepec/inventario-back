@@ -20,7 +20,14 @@ function parseCol(r: Record<string, unknown>) {
 collections.get('/', async (c) => {
   const page  = Math.max(1, Number(c.req.query('page') ?? 1));
   const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 20)));
-  const search = c.req.query('search') ?? '';
+  const search    = c.req.query('search') ?? '';
+  const author    = c.req.query('author') ?? '';
+  const publisher = c.req.query('publisher') ?? '';
+  const sort      = c.req.query('sort') ?? 'title';
+  const order     = c.req.query('order') === 'desc' ? 'DESC' : 'ASC';
+
+  const allowedSort = ['title', 'created_at', 'updated_at'];
+  const safeSort = allowedSort.includes(sort) ? sort : 'title';
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -30,10 +37,15 @@ collections.get('/', async (c) => {
     const like = `%${search}%`;
     params.push(like, like);
   }
+  if (author) {
+    conditions.push("EXISTS (SELECT 1 FROM json_each(authors) WHERE json_extract(value, '$.name') = ?)");
+    params.push(author);
+  }
+  if (publisher) { conditions.push('publisher = ?'); params.push(publisher); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await paginate<Record<string, unknown>>(
-    c.env.DB, 'collections', where, params, page, limit, 'title ASC'
+    c.env.DB, 'collections', where, params, page, limit, `${safeSort} ${order}`
   );
 
   result.data = result.data.map(parseCol);
