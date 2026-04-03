@@ -37,8 +37,12 @@ comics.get('/', async (c) => {
     c.env.DB, 'comics', where, params, page, limit, `${safeSort} ${order}`
   );
 
-  // Convertir owned (0/1) a boolean en la respuesta
-  result.data = result.data.map(r => ({ ...r, owned: r['owned'] === 1 }));
+  // Convertir owned (0/1) a boolean y parsear authors JSON
+  result.data = result.data.map(r => ({
+    ...r,
+    owned: r['owned'] === 1,
+    authors: r['authors'] ? JSON.parse(r['authors'] as string) : null,
+  }));
 
   return c.json(result);
 });
@@ -57,7 +61,11 @@ comics.get('/:id', async (c) => {
     .first<Record<string, unknown>>();
 
   if (!comic) return c.json({ error: 'No encontrado' }, 404);
-  return c.json({ ...comic, owned: comic['owned'] === 1 });
+  return c.json({
+    ...comic,
+    owned: comic['owned'] === 1,
+    authors: comic['authors'] ? JSON.parse(comic['authors'] as string) : null,
+  });
 });
 
 // POST /comics
@@ -65,6 +73,7 @@ comics.post('/', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
   const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
   const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
+  const json = (key: string) => { const v = body[key]; return Array.isArray(v) ? JSON.stringify(v) : (typeof v === 'string' ? v : null); };
 
   // Upsert: buscar duplicado por ISBN o por título+colección
   const isbn = str('isbn');
@@ -98,6 +107,7 @@ comics.post('/', async (c) => {
         cover_url=COALESCE(?,cover_url),
         collection_id=COALESCE(?,collection_id),
         price=COALESCE(?,price), binding=COALESCE(?,binding),
+        authors=COALESCE(?,authors),
         updated_at=?
       WHERE id=?
     `).bind(
@@ -110,12 +120,13 @@ comics.post('/', async (c) => {
       str('synopsis'), str('genre'), str('format'),
       num('pages'), str('language'), str('cover_url'),
       num('collection_id'), num('price'), str('binding'),
+      json('authors'),
       now(), existing.id
     ).run();
 
     const comic = await c.env.DB
       .prepare('SELECT * FROM comics WHERE id = ?').bind(existing.id).first<Record<string, unknown>>();
-    return c.json({ ...comic, owned: comic?.['owned'] === 1 });
+    return c.json({ ...comic, owned: comic?.['owned'] === 1, authors: comic?.['authors'] ? JSON.parse(comic['authors'] as string) : null });
   }
 
   const result = await c.env.DB.prepare(`
@@ -125,9 +136,9 @@ comics.post('/', async (c) => {
       publisher, collection, publish_date, original_publisher, original_title,
       synopsis, genre, format, pages, language, cover_url,
       read_status, owned, rating, notes,
-      collection_id, price, binding,
+      collection_id, price, binding, authors,
       created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
     str('title'),
     str('series'), num('number'), num('volume'),
@@ -140,7 +151,7 @@ comics.post('/', async (c) => {
     str('read_status') ?? 'unread',
     body['owned'] ? 1 : 0,
     num('rating'), str('notes'),
-    num('collection_id'), num('price'), str('binding'),
+    num('collection_id'), num('price'), str('binding'), json('authors'),
     now(), now()
   ).run();
 
@@ -149,7 +160,7 @@ comics.post('/', async (c) => {
     .bind(result.meta.last_row_id)
     .first<Record<string, unknown>>();
 
-  return c.json({ ...comic, owned: comic?.['owned'] === 1 }, 201);
+  return c.json({ ...comic, owned: comic?.['owned'] === 1, authors: comic?.['authors'] ? JSON.parse(comic['authors'] as string) : null }, 201);
 });
 
 // PUT /comics/:id
@@ -158,6 +169,7 @@ comics.put('/:id', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
   const str = (key: string) => { const v = body[key]; return (v === '' || v == null) ? null : String(v); };
   const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
+  const json = (key: string) => { const v = body[key]; return Array.isArray(v) ? JSON.stringify(v) : (typeof v === 'string' ? v : null); };
 
   const existing = await c.env.DB
     .prepare('SELECT id FROM comics WHERE id = ?').bind(id).first();
@@ -170,7 +182,7 @@ comics.put('/:id', async (c) => {
       publisher=?, collection=?, publish_date=?, original_publisher=?, original_title=?,
       synopsis=?, genre=?, format=?, pages=?, language=?, cover_url=?,
       read_status=?, owned=?, rating=?, notes=?,
-      collection_id=?, price=?, binding=?,
+      collection_id=?, price=?, binding=?, authors=?,
       updated_at=?
     WHERE id=?
   `).bind(
@@ -185,13 +197,13 @@ comics.put('/:id', async (c) => {
     str('read_status') ?? 'unread',
     body['owned'] ? 1 : 0,
     num('rating'), str('notes'),
-    num('collection_id'), num('price'), str('binding'),
+    num('collection_id'), num('price'), str('binding'), json('authors'),
     now(), id
   ).run();
 
   const comic = await c.env.DB
     .prepare('SELECT * FROM comics WHERE id = ?').bind(id).first<Record<string, unknown>>();
-  return c.json({ ...comic, owned: comic?.['owned'] === 1 });
+  return c.json({ ...comic, owned: comic?.['owned'] === 1, authors: comic?.['authors'] ? JSON.parse(comic['authors'] as string) : null });
 });
 
 // DELETE /comics/:id

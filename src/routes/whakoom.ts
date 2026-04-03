@@ -340,11 +340,34 @@ function parseComic(html: string, id: string) {
   const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
   const { pages, binding, price } = extractEditionFields(editionDetails, html);
 
-  // Autores desde meta books:author
-  const authorUrls = [...html.matchAll(/books:author[^>]+content="[^"]*\/autores\/\d+\/([^"]+)"/gi)];
-  const authors = authorUrls.map(m =>
-    m[1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-  );
+  // Autores con roles desde la sección <h3 class="autores">
+  const parseAuthors = (block: string): { name: string; role: string }[] => {
+    const result: { name: string; role: string }[] = [];
+    const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:&nbsp;\(([^)]+)\))?/gi;
+    let m;
+    while ((m = re.exec(block)) !== null) {
+      result.push({ name: m[1].trim(), role: m[2]?.trim() ?? '' });
+    }
+    return result;
+  };
+
+  const authorsBlock = html.match(/<h3[^>]*class="autores"[^>]*>Autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
+  const otherAuthorsBlock = html.match(/<h3[^>]*class="more-authors"[^>]*>Otros autores<\/h3>\s*<p>([\s\S]*?)<\/p>/i);
+  let structuredAuthors = [
+    ...parseAuthors(authorsBlock ? authorsBlock[1] : ''),
+    ...parseAuthors(otherAuthorsBlock ? otherAuthorsBlock[1] : ''),
+  ];
+
+  // Fallback: si no encontramos la sección de autores, usar meta books:author
+  if (structuredAuthors.length === 0) {
+    const authorUrls = [...html.matchAll(/books:author[^>]+content="[^"]*\/autores\/\d+\/([^"]+)"/gi)];
+    structuredAuthors = authorUrls.map(m => ({
+      name: m[1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      role: '',
+    }));
+  }
+
+  const authors = structuredAuthors.map(a => a.name);
 
   // Serie: itemprop name h1 o fallback a og:title
   const seriesMatch = html.match(/itemprop="name"[^>]*>([\s\S]*?)<\/h1/i);
@@ -369,6 +392,7 @@ function parseComic(html: string, id: string) {
     cover,
     description,
     authors,
+    structuredAuthors,
     publisher,
     date,
     series,
