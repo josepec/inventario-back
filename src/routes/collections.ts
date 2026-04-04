@@ -187,6 +187,9 @@ collections.put('/:id', async (c) => {
 
   const tracking = body['tracking'] != null ? (body['tracking'] ? 1 : 0) : null;
 
+  const hasRating = 'rating' in body;
+  const hasNotes = 'notes' in body;
+
   await c.env.DB.prepare(`
     UPDATE collections SET
       title=?, publisher=?, cover_url=?, total_issues=?, description=?, url=?,
@@ -194,7 +197,9 @@ collections.put('/:id', async (c) => {
       edition_details=COALESCE(?,edition_details), synopsis=COALESCE(?,synopsis),
       authors=COALESCE(?,authors), issues=COALESCE(?,issues),
       whakoom_synced_at=COALESCE(?,whakoom_synced_at),
-      tracking=COALESCE(?,tracking), updated_at=?
+      tracking=COALESCE(?,tracking),
+      ${hasRating ? 'rating=?,' : ''} ${hasNotes ? 'notes=?,' : ''}
+      updated_at=?
     WHERE id=?
   `).bind(
     str('title') ?? 'Sin título',
@@ -211,6 +216,8 @@ collections.put('/:id', async (c) => {
     json('issues'),
     str('whakoom_synced_at'),
     tracking,
+    ...(hasRating ? [num('rating')] : []),
+    ...(hasNotes ? [str('notes')] : []),
     now(), id
   ).run();
 

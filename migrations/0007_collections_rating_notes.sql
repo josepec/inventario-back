@@ -1,0 +1,2 @@
+ALTER TABLE collections ADD COLUMN rating INTEGER CHECK(rating BETWEEN 1 AND 5 OR rating IS NULL);
+ALTER TABLE collections ADD COLUMN notes TEXT;
