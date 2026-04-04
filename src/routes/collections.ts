@@ -186,40 +186,34 @@ collections.put('/:id', async (c) => {
   if (!existing) return c.json({ error: 'No encontrada' }, 404);
 
   const tracking = body['tracking'] != null ? (body['tracking'] ? 1 : 0) : null;
+  const rating = 'rating' in body ? num('rating') : undefined;
+  const notes = 'notes' in body ? str('notes') : undefined;
 
-  const hasRating = 'rating' in body;
-  const hasNotes = 'notes' in body;
+  // Base update
+  const sets = [
+    'title=?', 'publisher=?', 'cover_url=?', 'total_issues=?', 'description=?', 'url=?',
+    'format=COALESCE(?,format)', 'status=COALESCE(?,status)',
+    'edition_details=COALESCE(?,edition_details)', 'synopsis=COALESCE(?,synopsis)',
+    'authors=COALESCE(?,authors)', 'issues=COALESCE(?,issues)',
+    'whakoom_synced_at=COALESCE(?,whakoom_synced_at)',
+    'tracking=COALESCE(?,tracking)',
+  ];
+  const values: unknown[] = [
+    str('title') ?? 'Sin título', str('publisher'), str('cover_url'), num('total_issues'),
+    str('description'), str('url'), str('format'), str('status'),
+    str('edition_details'), str('synopsis'), json('authors'), json('issues'),
+    str('whakoom_synced_at'), tracking,
+  ];
 
-  await c.env.DB.prepare(`
-    UPDATE collections SET
-      title=?, publisher=?, cover_url=?, total_issues=?, description=?, url=?,
-      format=COALESCE(?,format), status=COALESCE(?,status),
-      edition_details=COALESCE(?,edition_details), synopsis=COALESCE(?,synopsis),
-      authors=COALESCE(?,authors), issues=COALESCE(?,issues),
-      whakoom_synced_at=COALESCE(?,whakoom_synced_at),
-      tracking=COALESCE(?,tracking),
-      ${hasRating ? 'rating=?,' : ''} ${hasNotes ? 'notes=?,' : ''}
-      updated_at=?
-    WHERE id=?
-  `).bind(
-    str('title') ?? 'Sin título',
-    str('publisher'),
-    str('cover_url'),
-    num('total_issues'),
-    str('description'),
-    str('url'),
-    str('format'),
-    str('status'),
-    str('edition_details'),
-    str('synopsis'),
-    json('authors'),
-    json('issues'),
-    str('whakoom_synced_at'),
-    tracking,
-    ...(hasRating ? [num('rating')] : []),
-    ...(hasNotes ? [str('notes')] : []),
-    now(), id
-  ).run();
+  if (rating !== undefined) { sets.push('rating=?'); values.push(rating); }
+  if (notes !== undefined) { sets.push('notes=?'); values.push(notes); }
+
+  sets.push('updated_at=?');
+  values.push(now(), id);
+
+  await c.env.DB.prepare(
+    `UPDATE collections SET ${sets.join(', ')} WHERE id=?`
+  ).bind(...values).run();
 
   const col = await c.env.DB
     .prepare('SELECT * FROM collections WHERE id = ?').bind(id).first<Record<string, unknown>>();

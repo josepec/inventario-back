@@ -225,6 +225,30 @@ whakoom.get('/edition/:id', async (c) => {
             if (todosData.issues.length > data.issues.length) {
               data.issues = todosData.issues;
             }
+            // Si /todos también está paginado, intentar page=2,3... hasta completar
+            if (data.totalIssues > 0 && data.issues.length < data.totalIssues) {
+              const seenIds = new Set(data.issues.map(i => i.id));
+              for (let page = 2; page <= 10 && data.issues.length < data.totalIssues; page++) {
+                const pageRes = await whakoomFetch(
+                  `https://www.whakoom.com/ediciones/${id}/${slug}/todos?page=${page}`, c.env
+                );
+                if (!pageRes.ok) break;
+                const pageHtml = await pageRes.text();
+                if (pageHtml.includes('/login?ReturnUrl')) break;
+                const pageData = parseEdition(pageHtml, id);
+                if (pageData.issues.length === 0) break;
+                let added = 0;
+                for (const issue of pageData.issues) {
+                  if (!seenIds.has(issue.id)) {
+                    seenIds.add(issue.id);
+                    data.issues.push(issue);
+                    added++;
+                  }
+                }
+                if (added === 0) break;
+              }
+              data.issues.sort((a, b) => a.number - b.number);
+            }
           }
         }
       } catch { /* usar issues de baseHtml como fallback */ }
