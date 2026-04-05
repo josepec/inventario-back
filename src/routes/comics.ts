@@ -51,6 +51,7 @@ comics.get('/', async (c) => {
   const publisher   = c.req.query('publisher') ?? '';
   const price_min   = c.req.query('price_min') ?? '';
   const price_max   = c.req.query('price_max') ?? '';
+  const rating_min  = c.req.query('rating_min') ?? '';
 
   const allowedSort = ['created_at', 'updated_at', 'title', 'series', 'number', 'publish_date', 'price'];
   const safeSort = allowedSort.includes(sort) ? sort : 'created_at';
@@ -72,6 +73,7 @@ comics.get('/', async (c) => {
   if (publisher) { conditions.push('publisher = ?'); params.push(publisher); }
   if (price_min) { conditions.push('price >= ?'); params.push(Number(price_min)); }
   if (price_max) { conditions.push('price <= ?'); params.push(Number(price_max)); }
+  if (rating_min) { conditions.push('rating >= ?'); params.push(Number(rating_min)); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
