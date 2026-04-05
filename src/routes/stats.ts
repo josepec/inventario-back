@@ -6,6 +6,7 @@ const stats = new Hono<AppContext>();
 
 stats.use('*', requireAuth);
 
+// Basic stats (legacy)
 stats.get('/', async (c) => {
   const [comicsTotal, comicsRead, comicsOwned, booksTotal, booksRead, booksOwned] =
     await Promise.all([
@@ -24,6 +25,131 @@ stats.get('/', async (c) => {
     books_total:   booksTotal?.n ?? 0,
     books_read:    booksRead?.n ?? 0,
     books_owned:   booksOwned?.n ?? 0,
+  });
+});
+
+// Rich dashboard stats
+stats.get('/dashboard', async (c) => {
+  const db = c.env.DB;
+
+  const [
+    totals,
+    monthlyAdded,
+    monthlyRead,
+    byPublisher,
+    byRating,
+    collections,
+    recentComics,
+    totalSpent,
+    yearSummary,
+    prevYearSummary,
+  ] = await Promise.all([
+    // Totals
+    db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read,
+        SUM(CASE WHEN read_status = 'unread' THEN 1 ELSE 0 END) as unread,
+        SUM(CASE WHEN read_status = 'reading' THEN 1 ELSE 0 END) as reading,
+        (SELECT COUNT(*) FROM collections) as collections
+      FROM comics
+    `).first<Record<string, number>>(),
+
+    // Monthly added (last 12 months)
+    db.prepare(`
+      SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+      FROM comics
+      WHERE created_at >= date('now', '-12 months')
+      GROUP BY month ORDER BY month
+    `).all<{ month: string; count: number }>(),
+
+    // Monthly read — approximate via updated_at where read_status='read'
+    db.prepare(`
+      SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
+      FROM comics
+      WHERE read_status = 'read' AND updated_at >= date('now', '-12 months')
+      GROUP BY month ORDER BY month
+    `).all<{ month: string; count: number }>(),
+
+    // By publisher (top 10)
+    db.prepare(`
+      SELECT COALESCE(publisher, 'Desconocida') as publisher, COUNT(*) as count
+      FROM comics
+      GROUP BY publisher ORDER BY count DESC LIMIT 10
+    `).all<{ publisher: string; count: number }>(),
+
+    // By rating
+    db.prepare(`
+      SELECT rating, COUNT(*) as count FROM comics
+      WHERE rating IS NOT NULL
+      GROUP BY rating ORDER BY rating
+    `).all<{ rating: number; count: number }>(),
+
+    // Collection progress (top collections by size)
+    db.prepare(`
+      SELECT c.id, c.title, c.total_issues, c.cover_url, c.rating,
+        (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) as owned
+      FROM collections c
+      WHERE c.total_issues > 0
+      ORDER BY c.total_issues DESC
+      LIMIT 8
+    `).all<{ id: number; title: string; total_issues: number; cover_url: string | null; rating: number | null; owned: number }>(),
+
+    // Recent comics (last 6)
+    db.prepare(`
+      SELECT id, title, cover_url, rating, created_at
+      FROM comics ORDER BY created_at DESC LIMIT 6
+    `).all<{ id: number; title: string; cover_url: string | null; rating: number | null; created_at: string }>(),
+
+    // Total spent
+    db.prepare(`
+      SELECT COALESCE(SUM(price), 0) as total, AVG(price) as avg
+      FROM comics WHERE price IS NOT NULL
+    `).first<{ total: number; avg: number }>(),
+
+    // Current year summary
+    db.prepare(`
+      SELECT
+        COUNT(*) as added,
+        SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read,
+        COALESCE(SUM(price), 0) as spent
+      FROM comics
+      WHERE strftime('%Y', created_at) = strftime('%Y', 'now')
+    `).first<{ added: number; read: number; spent: number }>(),
+
+    // Previous year summary
+    db.prepare(`
+      SELECT
+        COUNT(*) as added,
+        SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read,
+        COALESCE(SUM(price), 0) as spent
+      FROM comics
+      WHERE strftime('%Y', created_at) = CAST(strftime('%Y', 'now') AS INTEGER) - 1
+    `).first<{ added: number; read: number; spent: number }>(),
+  ]);
+
+  return c.json({
+    totals: {
+      comics: totals?.total ?? 0,
+      read: totals?.read ?? 0,
+      unread: totals?.unread ?? 0,
+      reading: totals?.reading ?? 0,
+      collections: totals?.collections ?? 0,
+    },
+    monthly: {
+      added: monthlyAdded.results,
+      read: monthlyRead.results,
+    },
+    byPublisher: byPublisher.results,
+    byRating: byRating.results,
+    collections: collections.results,
+    recentComics: recentComics.results,
+    spending: {
+      total: totalSpent?.total ?? 0,
+      avg: totalSpent?.avg ? Math.round(totalSpent.avg * 100) / 100 : 0,
+    },
+    thisYear: yearSummary ?? { added: 0, read: 0, spent: 0 },
+    prevYear: prevYearSummary ?? { added: 0, read: 0, spent: 0 },
   });
 });
 
