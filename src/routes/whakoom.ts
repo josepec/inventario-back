@@ -212,7 +212,7 @@ whakoom.get('/edition/:id', async (c) => {
     // 3. Parsear info base (autores, sinopsis, detalles edición)
     const data = parseEdition(baseHtml, id);
 
-    // 4. Fetch /todos con slug para obtener todos los issues
+    // 4. Fetch /todos con slug para obtener todos los issues (paginado si hace falta)
     if (slug) {
       try {
         const todosRes = await whakoomFetch(
@@ -224,6 +224,28 @@ whakoom.get('/edition/:id', async (c) => {
             const todosData = parseEdition(todosHtml, id);
             if (todosData.issues.length > data.issues.length) {
               data.issues = todosData.issues;
+            }
+            // Paginar si faltan issues
+            if (data.totalIssues > 0 && data.issues.length < data.totalIssues) {
+              const seenIds = new Set(data.issues.map((i: { id: string }) => i.id));
+              for (let pg = 2; pg <= 10 && data.issues.length < data.totalIssues; pg++) {
+                try {
+                  const pgRes = await whakoomFetch(
+                    `https://www.whakoom.com/ediciones/${id}/${slug}/todos?page=${pg}`, c.env
+                  );
+                  if (!pgRes.ok) break;
+                  const pgHtml = await pgRes.text();
+                  if (pgHtml.includes('/login?ReturnUrl')) break;
+                  const pgData = parseEdition(pgHtml, id);
+                  if (pgData.issues.length === 0) break;
+                  let added = 0;
+                  for (const issue of pgData.issues) {
+                    if (!seenIds.has(issue.id)) { seenIds.add(issue.id); data.issues.push(issue); added++; }
+                  }
+                  if (added === 0) break;
+                } catch { break; }
+              }
+              data.issues.sort((a: { number: number }, b: { number: number }) => a.number - b.number);
             }
           }
         }
