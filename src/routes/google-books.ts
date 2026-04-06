@@ -96,7 +96,7 @@ async function casaDelLibroPrice(isbn: string): Promise<number | null> {
   }
 }
 
-// Scrape price from Amazon.es by ISBN
+// Scrape price from Amazon.es by ISBN — prefers RRP (a-text-price), falls back to selling price
 async function amazonPrice(isbn: string): Promise<number | null> {
   try {
     const cleanIsbn = isbn.replace(/[-\s]/g, '');
@@ -109,7 +109,15 @@ async function amazonPrice(isbn: string): Promise<number | null> {
     });
     if (!res.ok) return null;
     const html = await res.text();
-    // First result price: a-price-whole + a-price-fraction
+
+    // 1. RRP / PVP (strikethrough price = a-text-price): "9,99 €"
+    const rrp = html.match(/a-text-price[^>]*>.*?a-offscreen[^>]*>([\d]+[,.][\d]+)\s*€/s);
+    if (rrp) {
+      const price = Number(rrp[1].replace(',', '.'));
+      if (price > 0 && price < 200) return price;
+    }
+
+    // 2. Selling price (a-price-whole + a-price-fraction)
     const whole = html.match(/a-price-whole[^>]*>(\d+)/);
     const fraction = html.match(/a-price-fraction[^>]*>(\d+)/);
     if (whole) {
