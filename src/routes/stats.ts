@@ -108,13 +108,14 @@ stats.get('/dashboard', async (c) => {
       GROUP BY rating ORDER BY rating
     `).all<{ rating: number; count: number }>(),
 
-    // Collection progress (top collections by size)
+    // Collection progress (incomplete collections, sorted by most progress)
     db.prepare(`
       SELECT c.id, c.title, c.total_issues, c.cover_url, c.rating,
         (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) as owned
       FROM collections c
       WHERE c.total_issues > 0
-      ORDER BY c.total_issues DESC
+      HAVING owned < c.total_issues
+      ORDER BY (CAST(owned AS REAL) / c.total_issues) DESC
       LIMIT 8
     `).all<{ id: number; title: string; total_issues: number; cover_url: string | null; rating: number | null; owned: number }>(),
 
