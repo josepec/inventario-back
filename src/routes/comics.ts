@@ -71,8 +71,13 @@ comics.get('/', async (c) => {
     params.push(author, author, author);
   }
   if (publisher) { conditions.push('publisher = ?'); params.push(publisher); }
-  if (price_min) { conditions.push('price >= ?'); params.push(Number(price_min)); }
-  if (price_max) { conditions.push('price <= ?'); params.push(Number(price_max)); }
+  const no_price = c.req.query('no_price') ?? '';
+  if (no_price === 'true') {
+    conditions.push('(price IS NULL OR price = 0)');
+  } else {
+    if (price_min) { conditions.push('price >= ?'); params.push(Number(price_min)); }
+    if (price_max) { conditions.push('price <= ?'); params.push(Number(price_max)); }
+  }
   if (rating_min) { conditions.push('rating >= ?'); params.push(Number(rating_min)); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
