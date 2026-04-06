@@ -74,6 +74,12 @@ googleBooks.get('/search', async (c) => {
   });
 });
 
+// Validate ISBN format (10 or 13 digits, optionally with hyphens)
+function isValidIsbn(isbn: string): boolean {
+  const clean = isbn.replace(/[-\s]/g, '');
+  return /^\d{10}$/.test(clean) || /^\d{13}$/.test(clean);
+}
+
 // Scrape price from Casa del Libro by ISBN
 async function casaDelLibroPrice(isbn: string): Promise<number | null> {
   try {
@@ -134,6 +140,10 @@ async function amazonPrice(isbn: string): Promise<number | null> {
 googleBooks.get('/isbn/:isbn', async (c) => {
   const isbn = c.req.param('isbn');
   const cleanIsbn = isbn.replace(/[-\s]/g, '');
+
+  // Only proceed if ISBN is valid (10 or 13 digits)
+  if (!isValidIsbn(cleanIsbn)) return c.json({ data: null });
+
   const url = `${API}?q=isbn:${encodeURIComponent(cleanIsbn)}&maxResults=1`;
   const res = await fetch(url);
 
@@ -144,7 +154,7 @@ googleBooks.get('/isbn/:isbn', async (c) => {
   }
 
   // If no price from Google Books, try Amazon.es then Casa del Libro
-  if ((!data || !data.price) && cleanIsbn) {
+  if (!data || !data.price) {
     const extPrice = await amazonPrice(cleanIsbn) ?? await casaDelLibroPrice(cleanIsbn);
     if (extPrice) {
       if (data) {
