@@ -4,8 +4,6 @@ import { requireAuth } from '../middleware/auth';
 
 const whakoom = new Hono<AppContext>();
 
-whakoom.use('*', requireAuth);
-
 const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -128,6 +126,8 @@ async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PA
 
   return res;
 }
+
+whakoom.use('*', requireAuth);
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
 
