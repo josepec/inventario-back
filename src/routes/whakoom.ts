@@ -307,7 +307,8 @@ function extractEditionFields(section: string, fullHtml?: string): { pages: numb
   const searchIn = (text: string) => ({
     pages: text.match(/(\d+)\s*pp\b/i),
     binding: text.match(/\b(Cart[oó]n[eé]|Grapa|R[uú]stica|Tapa\s+dura|Tapa\s+blanda|Bolsillo|Lujo)\b/i),
-    price: text.match(/PVP\s*([\d]+(?:[,.][\d]+)?)\s*€/i),
+    price: text.match(/PVP\s*([\d]+(?:[,.][\d]+)?)\s*(?:€|&euro;)/i)
+      ?? text.match(/([\d]+(?:[,.][\d]+)?)\s*(?:€|&euro;)/i),
   });
 
   const s = searchIn(section);
@@ -357,8 +358,9 @@ function parseComic(html: string, id: string) {
   const language = itemprop('inLanguage');
 
   // "Sobre esta edición" — páginas, encuadernación, precio
-  const aboutMatch = html.match(/<h2[^>]*class="about-edition"[^>]*>[^<]*<\/h2>\s*<p>([^<]+)<\/p>/i)
-    ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i);
+  const aboutMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
+    ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
+    ?? html.match(/Sobre esta edici[oó]n[\s\S]*?<p>([^<]+)<\/p>/i);
   const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
   const { pages, binding, price } = extractEditionFields(editionDetails, html);
 
@@ -449,8 +451,10 @@ function parseEdition(html: string, id: string) {
   const cover = coverMatch ? coverMatch[1] : '';
 
   // "Sobre esta edición" → edition details (format, size, etc.)
-  const aboutMatch = html.match(/<h2[^>]*class="about-edition"[^>]*>[^<]*<\/h2>\s*<p>([^<]+)<\/p>/i);
-  const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
+  const aboutEdMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
+    ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
+    ?? html.match(/Sobre esta edici[oó]n[\s\S]*?<p>([^<]+)<\/p>/i);
+  const editionDetails = aboutEdMatch ? aboutEdMatch[1].trim() : '';
   const { pages: editionPages, binding: editionBinding, price: editionPrice } = extractEditionFields(editionDetails, html);
 
   // Argumento (synopsis)
