@@ -96,10 +96,37 @@ async function casaDelLibroPrice(isbn: string): Promise<number | null> {
   }
 }
 
-// Lookup by ISBN — tries Google Books, then Casa del Libro for price
+// Scrape price from Amazon.es by ISBN
+async function amazonPrice(isbn: string): Promise<number | null> {
+  try {
+    const cleanIsbn = isbn.replace(/[-\s]/g, '');
+    const res = await fetch(`https://www.amazon.es/s?k=${cleanIsbn}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'text/html',
+        'Accept-Language': 'es-ES,es;q=0.9',
+      },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    // First result price: a-price-whole + a-price-fraction
+    const whole = html.match(/a-price-whole[^>]*>(\d+)/);
+    const fraction = html.match(/a-price-fraction[^>]*>(\d+)/);
+    if (whole) {
+      const price = Number(`${whole[1]}.${fraction ? fraction[1] : '00'}`);
+      if (price > 0 && price < 200) return price;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Lookup by ISBN — tries Google Books → Amazon.es → Casa del Libro
 googleBooks.get('/isbn/:isbn', async (c) => {
   const isbn = c.req.param('isbn');
-  const url = `${API}?q=isbn:${encodeURIComponent(isbn)}&maxResults=1`;
+  const cleanIsbn = isbn.replace(/[-\s]/g, '');
+  const url = `${API}?q=isbn:${encodeURIComponent(cleanIsbn)}&maxResults=1`;
   const res = await fetch(url);
 
   let data: ReturnType<typeof mapVolume> | null = null;
@@ -108,21 +135,21 @@ googleBooks.get('/isbn/:isbn', async (c) => {
     if (json.items?.length) data = mapVolume(json.items[0]);
   }
 
-  // If no price from Google Books, try Casa del Libro
-  if ((!data || !data.price) && isbn) {
-    const cdlPrice = await casaDelLibroPrice(isbn);
-    if (cdlPrice) {
+  // If no price from Google Books, try Amazon.es then Casa del Libro
+  if ((!data || !data.price) && cleanIsbn) {
+    const extPrice = await amazonPrice(cleanIsbn) ?? await casaDelLibroPrice(cleanIsbn);
+    if (extPrice) {
       if (data) {
-        data.price = cdlPrice;
+        data.price = extPrice;
         data.currency = 'EUR';
       } else {
         data = {
           googleId: '', title: '', subtitle: null, authors: [],
           publisher: null, publishedDate: null, description: null,
-          isbn: isbn.length === 10 ? isbn : null,
-          isbn13: isbn.length === 13 ? isbn : null,
+          isbn: cleanIsbn.length === 10 ? cleanIsbn : null,
+          isbn13: cleanIsbn.length === 13 ? cleanIsbn : null,
           pages: null, categories: [], language: null, cover: null,
-          price: cdlPrice, currency: 'EUR',
+          price: extPrice, currency: 'EUR',
         };
       }
     }
