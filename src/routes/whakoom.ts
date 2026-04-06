@@ -307,8 +307,7 @@ function extractEditionFields(section: string, fullHtml?: string): { pages: numb
   const searchIn = (text: string) => ({
     pages: text.match(/(\d+)\s*pp\b/i),
     binding: text.match(/\b(Cart[oó]n[eé]|Grapa|R[uú]stica|Tapa\s+dura|Tapa\s+blanda|Bolsillo|Lujo)\b/i),
-    price: text.match(/PVP\s*([\d]+(?:[,.][\d]+)?)\s*(?:€|&euro;)/i)
-      ?? text.match(/([\d]+(?:[,.][\d]+)?)\s*(?:€|&euro;)/i),
+    price: text.match(/PVP\s*([\d]+(?:[,.][\d]+)?)\s*(?:€|&euro;)/i),
   });
 
   const s = searchIn(section);
