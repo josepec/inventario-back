@@ -31,6 +31,9 @@ books.get('/', async (c) => {
   if (read_status) { conditions.push('read_status = ?'); params.push(read_status); }
   if (owned !== '') { conditions.push('owned = ?'); params.push(owned === 'true' ? 1 : 0); }
 
+  const rating_min = c.req.query('rating_min') ?? '';
+  if (rating_min) { conditions.push('rating >= ?'); params.push(Number(rating_min)); }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const result = await paginate<Record<string, unknown>>(

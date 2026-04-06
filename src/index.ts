@@ -9,6 +9,8 @@ import { scan } from './routes/scan';
 import { whakoom } from './routes/whakoom';
 import { collections } from './routes/collections';
 import { covers } from './routes/covers';
+import { googleBooks } from './routes/google-books';
+import { googleBooks } from './routes/google-books';
 
 const app = new Hono<AppContext>();
 
@@ -40,6 +42,7 @@ app.route('/scan', scan);
 app.route('/whakoom', whakoom);
 app.route('/collections', collections);
 app.route('/covers', covers);
+app.route('/google-books', googleBooks);
 
 // Health check
 app.get('/health', (c) => c.json({ ok: true, ts: new Date().toISOString() }));
