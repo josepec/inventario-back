@@ -136,6 +136,48 @@ async function amazonPrice(isbn: string): Promise<number | null> {
   }
 }
 
+// Scrape price from ECC Ediciones by comic slug
+async function eccPrice(title: string): Promise<number | null> {
+  try {
+    // Build slug from title: lowercase, replace spaces/special chars with hyphens
+    const slug = title
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    const res = await fetch(`https://www.eccediciones.com/comic/${slug}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'text/html',
+      },
+      redirect: 'follow',
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // ECC embeds price in JSON data: "price":"13.99"
+    const priceMatch = html.match(/"price"\s*:\s*"?([\d]+(?:[.,]\d+)?)"?/);
+    if (priceMatch) {
+      const price = Number(priceMatch[1].replace(',', '.'));
+      if (price > 0 && price < 200) return price;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Try editorial website for price (currently supports ECC)
+async function editorialPrice(title: string, publisher: string): Promise<number | null> {
+  const pub = (publisher || '').toLowerCase();
+  if (pub.includes('ecc')) {
+    return eccPrice(title);
+  }
+  // Panini uses anti-bot (queue-it), not supported
+  return null;
+}
+
 // Lookup by ISBN — tries Google Books → Amazon.es → Casa del Libro
 googleBooks.get('/isbn/:isbn', async (c) => {
   const isbn = c.req.param('isbn');
@@ -174,4 +216,14 @@ googleBooks.get('/isbn/:isbn', async (c) => {
   }
 
   return c.json({ data });
+});
+
+// Editorial price lookup — for comics without valid ISBN (grapas)
+googleBooks.get('/editorial-price', async (c) => {
+  const title = c.req.query('title') ?? '';
+  const publisher = c.req.query('publisher') ?? '';
+  if (!title) return c.json({ price: null });
+
+  const price = await editorialPrice(title, publisher);
+  return c.json({ price, currency: price ? 'EUR' : null });
 });

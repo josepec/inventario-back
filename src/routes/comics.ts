@@ -250,6 +250,22 @@ comics.put('/:id', async (c) => {
   return c.json({ ...comic, owned: comic?.['owned'] === 1, authors: comic?.['authors'] ? JSON.parse(comic['authors'] as string) : null });
 });
 
+// PATCH /comics/batch — bulk update fields (e.g. read_status)
+comics.patch('/batch', async (c) => {
+  const body = await c.req.json<{ ids: number[]; read_status?: string }>();
+  const ids = body.ids;
+  if (!ids?.length) return c.json({ error: 'ids requeridos' }, 400);
+
+  if (body.read_status) {
+    const placeholders = ids.map(() => '?').join(',');
+    await c.env.DB.prepare(
+      `UPDATE comics SET read_status = ?, updated_at = ? WHERE id IN (${placeholders})`
+    ).bind(body.read_status, now(), ...ids).run();
+  }
+
+  return c.json({ ok: true, updated: ids.length });
+});
+
 // DELETE /comics/:id
 comics.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'));

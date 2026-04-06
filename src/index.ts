@@ -10,7 +10,6 @@ import { whakoom } from './routes/whakoom';
 import { collections } from './routes/collections';
 import { covers } from './routes/covers';
 import { googleBooks } from './routes/google-books';
-import { googleBooks } from './routes/google-books';
 
 const app = new Hono<AppContext>();
 
