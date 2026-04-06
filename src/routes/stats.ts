@@ -151,6 +151,26 @@ stats.get('/dashboard', async (c) => {
     `).first<{ added: number; read: number; spent: number }>(),
   ]);
 
+  // Monthly spending (current + previous month) — only if tracking active
+  let thisMonthSpent = 0;
+  let prevMonthSpent = 0;
+  if (statsStartDate) {
+    const [thisM, prevM] = await Promise.all([
+      db.prepare(`
+        SELECT COALESCE(SUM(price), 0) as spent FROM comics
+        WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+          AND created_at >= ?
+      `).bind(statsStartDate).first<{ spent: number }>(),
+      db.prepare(`
+        SELECT COALESCE(SUM(price), 0) as spent FROM comics
+        WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', '-1 month')
+          AND created_at >= ?
+      `).bind(statsStartDate).first<{ spent: number }>(),
+    ]);
+    thisMonthSpent = thisM?.spent ?? 0;
+    prevMonthSpent = prevM?.spent ?? 0;
+  }
+
   return c.json({
     totals: {
       comics: totals?.total ?? 0,
@@ -173,6 +193,7 @@ stats.get('/dashboard', async (c) => {
     },
     thisYear: yearSummary ?? { added: 0, read: 0, spent: 0 },
     prevYear: prevYearSummary ?? { added: 0, read: 0, spent: 0 },
+    monthlySpending: { thisMonth: thisMonthSpent, prevMonth: prevMonthSpent },
     statsStartDate,
   });
 });

@@ -409,6 +409,10 @@ function parseComic(html: string, id: string) {
     series = og('title').replace(/\s*\([^)]+\)\s*$/, '');
   }
 
+  // Referencia a la edición (link a /ediciones/ID en el HTML)
+  const editionMatch = html.match(/href="\/ediciones\/(\d+)[^"]*"/i);
+  const editionId = editionMatch ? editionMatch[1] : null;
+
   return {
     id,
     title: title || series + (number ? ` #${number}` : ''),
@@ -425,6 +429,7 @@ function parseComic(html: string, id: string) {
     pages,
     binding,
     price,
+    editionId,
     url: `https://www.whakoom.com/comics/${id}`,
   };
 }
