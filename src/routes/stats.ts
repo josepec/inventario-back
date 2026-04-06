@@ -28,9 +28,28 @@ stats.get('/', async (c) => {
   });
 });
 
+// Get stats_start_date setting
+stats.get('/settings/stats-start', async (c) => {
+  const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'stats_start_date'").first<{ value: string }>();
+  return c.json({ date: row?.value ?? null });
+});
+
+// Set stats_start_date to today
+stats.post('/settings/stats-start', async (c) => {
+  const today = new Date().toISOString().slice(0, 10);
+  await c.env.DB.prepare(
+    "INSERT INTO settings (key, value) VALUES ('stats_start_date', ?) ON CONFLICT(key) DO UPDATE SET value = ?"
+  ).bind(today, today).run();
+  return c.json({ date: today });
+});
+
 // Rich dashboard stats
 stats.get('/dashboard', async (c) => {
   const db = c.env.DB;
+
+  // Check if monthly tracking is active
+  const statsStartRow = await db.prepare("SELECT value FROM settings WHERE key = 'stats_start_date'").first<{ value: string }>();
+  const statsStartDate = statsStartRow?.value ?? null;
 
   const [
     totals,
@@ -55,21 +74,25 @@ stats.get('/dashboard', async (c) => {
       FROM comics
     `).first<Record<string, number>>(),
 
-    // Monthly added (last 12 months)
-    db.prepare(`
-      SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
-      FROM comics
-      WHERE created_at >= date('now', '-12 months')
-      GROUP BY month ORDER BY month
-    `).all<{ month: string; count: number }>(),
+    // Monthly added (last 12 months, only after stats_start_date)
+    statsStartDate
+      ? db.prepare(`
+          SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+          FROM comics
+          WHERE created_at >= ? AND created_at >= date('now', '-12 months')
+          GROUP BY month ORDER BY month
+        `).bind(statsStartDate).all<{ month: string; count: number }>()
+      : Promise.resolve({ results: [] as { month: string; count: number }[] }),
 
-    // Monthly read — approximate via updated_at where read_status='read'
-    db.prepare(`
-      SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
-      FROM comics
-      WHERE read_status = 'read' AND updated_at >= date('now', '-12 months')
-      GROUP BY month ORDER BY month
-    `).all<{ month: string; count: number }>(),
+    // Monthly read (only after stats_start_date)
+    statsStartDate
+      ? db.prepare(`
+          SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
+          FROM comics
+          WHERE read_status = 'read' AND updated_at >= ? AND updated_at >= date('now', '-12 months')
+          GROUP BY month ORDER BY month
+        `).bind(statsStartDate).all<{ month: string; count: number }>()
+      : Promise.resolve({ results: [] as { month: string; count: number }[] }),
 
     // By publisher (top 10)
     db.prepare(`
@@ -150,6 +173,7 @@ stats.get('/dashboard', async (c) => {
     },
     thisYear: yearSummary ?? { added: 0, read: 0, spent: 0 },
     prevYear: prevYearSummary ?? { added: 0, read: 0, spent: 0 },
+    statsStartDate,
   });
 });
 
