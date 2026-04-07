@@ -114,8 +114,8 @@ stats.get('/dashboard', async (c) => {
         (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) as owned
       FROM collections c
       WHERE c.total_issues > 0
-      HAVING owned < c.total_issues
-      ORDER BY (CAST(owned AS REAL) / c.total_issues) DESC
+        AND (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) < c.total_issues
+      ORDER BY (CAST((SELECT COUNT(*) FROM comics WHERE collection_id = c.id) AS REAL) / c.total_issues) DESC
       LIMIT 8
     `).all<{ id: number; title: string; total_issues: number; cover_url: string | null; rating: number | null; owned: number }>(),
 
