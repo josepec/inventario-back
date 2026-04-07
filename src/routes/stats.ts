@@ -43,27 +43,17 @@ stats.post('/settings/stats-start', async (c) => {
   return c.json({ date: today });
 });
 
-// Rich dashboard stats
+// Rich dashboard stats — comics
 stats.get('/dashboard', async (c) => {
   const db = c.env.DB;
 
-  // Check if monthly tracking is active
   const statsStartRow = await db.prepare("SELECT value FROM settings WHERE key = 'stats_start_date'").first<{ value: string }>();
   const statsStartDate = statsStartRow?.value ?? null;
 
   const [
-    totals,
-    monthlyAdded,
-    monthlyRead,
-    byPublisher,
-    byRating,
-    collections,
-    recentComics,
-    totalSpent,
-    yearSummary,
-    prevYearSummary,
+    totals, monthlyAdded, monthlyRead, byPublisher, byRating,
+    collections, recentComics, totalSpent, yearSummary, prevYearSummary,
   ] = await Promise.all([
-    // Totals
     db.prepare(`
       SELECT
         COUNT(*) as total,
@@ -74,41 +64,31 @@ stats.get('/dashboard', async (c) => {
       FROM comics
     `).first<Record<string, number>>(),
 
-    // Monthly added (last 12 months, only after stats_start_date)
     statsStartDate
       ? db.prepare(`
           SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
-          FROM comics
-          WHERE created_at >= ? AND created_at >= date('now', '-12 months')
+          FROM comics WHERE created_at >= ? AND created_at >= date('now', '-12 months')
           GROUP BY month ORDER BY month
         `).bind(statsStartDate).all<{ month: string; count: number }>()
       : Promise.resolve({ results: [] as { month: string; count: number }[] }),
 
-    // Monthly read (only after stats_start_date)
     statsStartDate
       ? db.prepare(`
           SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
-          FROM comics
-          WHERE read_status = 'read' AND updated_at >= ? AND updated_at >= date('now', '-12 months')
+          FROM comics WHERE read_status = 'read' AND updated_at >= ? AND updated_at >= date('now', '-12 months')
           GROUP BY month ORDER BY month
         `).bind(statsStartDate).all<{ month: string; count: number }>()
       : Promise.resolve({ results: [] as { month: string; count: number }[] }),
 
-    // By publisher (top 10)
     db.prepare(`
       SELECT COALESCE(publisher, 'Desconocida') as publisher, COUNT(*) as count
-      FROM comics
-      GROUP BY publisher ORDER BY count DESC LIMIT 10
+      FROM comics GROUP BY publisher ORDER BY count DESC LIMIT 10
     `).all<{ publisher: string; count: number }>(),
 
-    // By rating
     db.prepare(`
-      SELECT rating, COUNT(*) as count FROM comics
-      WHERE rating IS NOT NULL
-      GROUP BY rating ORDER BY rating
+      SELECT rating, COUNT(*) as count FROM comics WHERE rating IS NOT NULL GROUP BY rating ORDER BY rating
     `).all<{ rating: number; count: number }>(),
 
-    // Collection progress (incomplete collections, sorted by most progress)
     db.prepare(`
       SELECT c.id, c.title, c.total_issues, c.cover_url, c.rating,
         (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) as owned
@@ -119,54 +99,29 @@ stats.get('/dashboard', async (c) => {
       LIMIT 8
     `).all<{ id: number; title: string; total_issues: number; cover_url: string | null; rating: number | null; owned: number }>(),
 
-    // Recent comics (last 6)
-    db.prepare(`
-      SELECT id, title, cover_url, rating, created_at
-      FROM comics ORDER BY created_at DESC LIMIT 6
-    `).all<{ id: number; title: string; cover_url: string | null; rating: number | null; created_at: string }>(),
+    db.prepare(`SELECT id, title, cover_url, rating, created_at FROM comics ORDER BY created_at DESC LIMIT 6`
+    ).all<{ id: number; title: string; cover_url: string | null; rating: number | null; created_at: string }>(),
 
-    // Total spent
-    db.prepare(`
-      SELECT COALESCE(SUM(price), 0) as total, AVG(price) as avg
-      FROM comics WHERE price IS NOT NULL
-    `).first<{ total: number; avg: number }>(),
+    db.prepare(`SELECT COALESCE(SUM(price), 0) as total, AVG(price) as avg FROM comics WHERE price IS NOT NULL`
+    ).first<{ total: number; avg: number }>(),
 
-    // Current year summary
     db.prepare(`
-      SELECT
-        COUNT(*) as added,
-        SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read,
-        COALESCE(SUM(price), 0) as spent
-      FROM comics
-      WHERE strftime('%Y', created_at) = strftime('%Y', 'now')
+      SELECT COUNT(*) as added, SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read, COALESCE(SUM(price), 0) as spent
+      FROM comics WHERE strftime('%Y', created_at) = strftime('%Y', 'now')
     `).first<{ added: number; read: number; spent: number }>(),
 
-    // Previous year summary
     db.prepare(`
-      SELECT
-        COUNT(*) as added,
-        SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read,
-        COALESCE(SUM(price), 0) as spent
-      FROM comics
-      WHERE strftime('%Y', created_at) = CAST(strftime('%Y', 'now') AS INTEGER) - 1
+      SELECT COUNT(*) as added, SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read, COALESCE(SUM(price), 0) as spent
+      FROM comics WHERE strftime('%Y', created_at) = CAST(strftime('%Y', 'now') AS INTEGER) - 1
     `).first<{ added: number; read: number; spent: number }>(),
   ]);
 
-  // Monthly spending (current + previous month) — only if tracking active
   let thisMonthSpent = 0;
   let prevMonthSpent = 0;
   if (statsStartDate) {
     const [thisM, prevM] = await Promise.all([
-      db.prepare(`
-        SELECT COALESCE(SUM(price), 0) as spent FROM comics
-        WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-          AND created_at >= ?
-      `).bind(statsStartDate).first<{ spent: number }>(),
-      db.prepare(`
-        SELECT COALESCE(SUM(price), 0) as spent FROM comics
-        WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', '-1 month')
-          AND created_at >= ?
-      `).bind(statsStartDate).first<{ spent: number }>(),
+      db.prepare(`SELECT COALESCE(SUM(price), 0) as spent FROM comics WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') AND created_at >= ?`).bind(statsStartDate).first<{ spent: number }>(),
+      db.prepare(`SELECT COALESCE(SUM(price), 0) as spent FROM comics WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', '-1 month') AND created_at >= ?`).bind(statsStartDate).first<{ spent: number }>(),
     ]);
     thisMonthSpent = thisM?.spent ?? 0;
     prevMonthSpent = prevM?.spent ?? 0;
@@ -174,24 +129,117 @@ stats.get('/dashboard', async (c) => {
 
   return c.json({
     totals: {
-      comics: totals?.total ?? 0,
-      read: totals?.read ?? 0,
-      unread: totals?.unread ?? 0,
-      reading: totals?.reading ?? 0,
+      comics: totals?.total ?? 0, read: totals?.read ?? 0,
+      unread: totals?.unread ?? 0, reading: totals?.reading ?? 0,
       collections: totals?.collections ?? 0,
     },
-    monthly: {
-      added: monthlyAdded.results,
-      read: monthlyRead.results,
-    },
+    monthly: { added: monthlyAdded.results, read: monthlyRead.results },
     byPublisher: byPublisher.results,
     byRating: byRating.results,
     collections: collections.results,
     recentComics: recentComics.results,
-    spending: {
-      total: totalSpent?.total ?? 0,
-      avg: totalSpent?.avg ? Math.round(totalSpent.avg * 100) / 100 : 0,
+    spending: { total: totalSpent?.total ?? 0, avg: totalSpent?.avg ? Math.round(totalSpent.avg * 100) / 100 : 0 },
+    thisYear: yearSummary ?? { added: 0, read: 0, spent: 0 },
+    prevYear: prevYearSummary ?? { added: 0, read: 0, spent: 0 },
+    monthlySpending: { thisMonth: thisMonthSpent, prevMonth: prevMonthSpent },
+    statsStartDate,
+  });
+});
+
+// Rich dashboard stats — books
+stats.get('/dashboard/books', async (c) => {
+  const db = c.env.DB;
+
+  const statsStartRow = await db.prepare("SELECT value FROM settings WHERE key = 'stats_start_date'").first<{ value: string }>();
+  const statsStartDate = statsStartRow?.value ?? null;
+
+  const [
+    totals, monthlyAdded, monthlyRead, byPublisher, byGenre, byRating,
+    bySaga, recentBooks, totalSpent, yearSummary, prevYearSummary,
+  ] = await Promise.all([
+    db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read,
+        SUM(CASE WHEN read_status = 'unread' THEN 1 ELSE 0 END) as unread,
+        COUNT(DISTINCT saga) as sagas
+      FROM books
+    `).first<Record<string, number>>(),
+
+    statsStartDate
+      ? db.prepare(`
+          SELECT strftime('%Y-%m', created_at) as month, COUNT(*) as count
+          FROM books WHERE created_at >= ? AND created_at >= date('now', '-12 months')
+          GROUP BY month ORDER BY month
+        `).bind(statsStartDate).all<{ month: string; count: number }>()
+      : Promise.resolve({ results: [] as { month: string; count: number }[] }),
+
+    statsStartDate
+      ? db.prepare(`
+          SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
+          FROM books WHERE read_status = 'read' AND updated_at >= ? AND updated_at >= date('now', '-12 months')
+          GROUP BY month ORDER BY month
+        `).bind(statsStartDate).all<{ month: string; count: number }>()
+      : Promise.resolve({ results: [] as { month: string; count: number }[] }),
+
+    db.prepare(`
+      SELECT COALESCE(publisher, 'Desconocida') as publisher, COUNT(*) as count
+      FROM books GROUP BY publisher ORDER BY count DESC LIMIT 10
+    `).all<{ publisher: string; count: number }>(),
+
+    db.prepare(`
+      SELECT COALESCE(genre, 'Sin genero') as genre, COUNT(*) as count
+      FROM books GROUP BY genre ORDER BY count DESC LIMIT 10
+    `).all<{ genre: string; count: number }>(),
+
+    db.prepare(`
+      SELECT rating, COUNT(*) as count FROM books WHERE rating IS NOT NULL GROUP BY rating ORDER BY rating
+    `).all<{ rating: number; count: number }>(),
+
+    db.prepare(`
+      SELECT saga, COUNT(*) as count FROM books WHERE saga IS NOT NULL AND saga != '' GROUP BY saga ORDER BY count DESC LIMIT 8
+    `).all<{ saga: string; count: number }>(),
+
+    db.prepare(`SELECT id, title, cover_url, rating, created_at FROM books ORDER BY created_at DESC LIMIT 6`
+    ).all<{ id: number; title: string; cover_url: string | null; rating: number | null; created_at: string }>(),
+
+    db.prepare(`SELECT COALESCE(SUM(price), 0) as total, AVG(price) as avg FROM books WHERE price IS NOT NULL`
+    ).first<{ total: number; avg: number }>(),
+
+    db.prepare(`
+      SELECT COUNT(*) as added, SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read, COALESCE(SUM(price), 0) as spent
+      FROM books WHERE strftime('%Y', created_at) = strftime('%Y', 'now')
+    `).first<{ added: number; read: number; spent: number }>(),
+
+    db.prepare(`
+      SELECT COUNT(*) as added, SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read, COALESCE(SUM(price), 0) as spent
+      FROM books WHERE strftime('%Y', created_at) = CAST(strftime('%Y', 'now') AS INTEGER) - 1
+    `).first<{ added: number; read: number; spent: number }>(),
+  ]);
+
+  let thisMonthSpent = 0;
+  let prevMonthSpent = 0;
+  if (statsStartDate) {
+    const [thisM, prevM] = await Promise.all([
+      db.prepare(`SELECT COALESCE(SUM(price), 0) as spent FROM books WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') AND created_at >= ?`).bind(statsStartDate).first<{ spent: number }>(),
+      db.prepare(`SELECT COALESCE(SUM(price), 0) as spent FROM books WHERE price IS NOT NULL AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', '-1 month') AND created_at >= ?`).bind(statsStartDate).first<{ spent: number }>(),
+    ]);
+    thisMonthSpent = thisM?.spent ?? 0;
+    prevMonthSpent = prevM?.spent ?? 0;
+  }
+
+  return c.json({
+    totals: {
+      books: totals?.total ?? 0, read: totals?.read ?? 0,
+      unread: totals?.unread ?? 0, sagas: totals?.sagas ?? 0,
     },
+    monthly: { added: monthlyAdded.results, read: monthlyRead.results },
+    byPublisher: byPublisher.results,
+    byGenre: byGenre.results,
+    byRating: byRating.results,
+    bySaga: bySaga.results,
+    recentBooks: recentBooks.results,
+    spending: { total: totalSpent?.total ?? 0, avg: totalSpent?.avg ? Math.round(totalSpent.avg * 100) / 100 : 0 },
     thisYear: yearSummary ?? { added: 0, read: 0, spent: 0 },
     prevYear: prevYearSummary ?? { added: 0, read: 0, spent: 0 },
     monthlySpending: { thisMonth: thisMonthSpent, prevMonth: prevMonthSpent },
