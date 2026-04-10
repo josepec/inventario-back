@@ -503,10 +503,20 @@ function parseEdition(html: string, id: string) {
     const liTag = fragment.match(/<li[^>]*>/i)?.[0] ?? '';
     const published = !liTag.includes('not-published');
 
-    // Extract issue number — handles plain "#5", dual "#18/4", or "#15 / 1"
+    // Extract issue number from: 1) issue-number span, 2) href /comics/ID/slug/NUM, 3) title attr "#NUM"
     const numSpan = fragment.match(/class="issue-number"[^>]*>([\s\S]*?)<\//i);
     const numText = numSpan ? numSpan[1].replace(/<[^>]*>/g, '').trim() : '';
-    const numMatch = numText.match(/#?(\d+)/);
+    let numMatch = numText.match(/#?(\d+)/);
+    if (!numMatch) {
+      // Fallback: extract from href like /comics/6FNHx/wonder_woman_2012-_2022/15
+      const hrefMatch = fragment.match(/href="\/comics\/[^/]+\/[^/]+\/(\d+)"/i);
+      if (hrefMatch) numMatch = hrefMatch;
+    }
+    if (!numMatch) {
+      // Fallback: extract from title attr like "Wonder Woman (2012- 2022) #15 / 1"
+      const titleAttr = fragment.match(/title="[^"]*#(\d+)/i);
+      if (titleAttr) numMatch = titleAttr;
+    }
     const num = numMatch ? Number(numMatch[1]) : 0;
 
     const titleM = fragment.match(/title="([^"]+)"/i);
