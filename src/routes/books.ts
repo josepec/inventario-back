@@ -36,6 +36,30 @@ books.get('/facets', async (c) => {
   });
 });
 
+// GET /books/sagas — saga browse list
+books.get('/sagas', async (c) => {
+  const rows = await c.env.DB.prepare(`
+    SELECT saga,
+           COUNT(*) as total,
+           SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read_count,
+           MIN(saga_number) as min_num, MAX(saga_number) as max_num,
+           GROUP_CONCAT(cover_url, '|||') as covers
+    FROM books
+    WHERE saga IS NOT NULL AND saga != ''
+    GROUP BY saga
+    ORDER BY saga ASC
+  `).all<{ saga: string; total: number; read_count: number; min_num: number | null; max_num: number | null; covers: string | null }>();
+
+  const sagas = rows.results.map(r => ({
+    name: r.saga,
+    total: r.total,
+    read: r.read_count,
+    covers: (r.covers || '').split('|||').filter(Boolean).slice(0, 4),
+  }));
+
+  return c.json(sagas);
+});
+
 // GET /books
 books.get('/', async (c) => {
   const page  = Math.max(1, Number(c.req.query('page') ?? 1));
