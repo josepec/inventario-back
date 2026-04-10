@@ -503,7 +503,10 @@ function parseEdition(html: string, id: string) {
     const liTag = fragment.match(/<li[^>]*>/i)?.[0] ?? '';
     const published = !liTag.includes('not-published');
 
-    const numMatch = fragment.match(/class="issue-number"[^>]*>#(\d+)/i);
+    // Extract issue number — handles plain "#5", dual "#18/4", or "#15 / 1"
+    const numSpan = fragment.match(/class="issue-number"[^>]*>([\s\S]*?)<\//i);
+    const numText = numSpan ? numSpan[1].replace(/<[^>]*>/g, '').trim() : '';
+    const numMatch = numText.match(/#?(\d+)/);
     const num = numMatch ? Number(numMatch[1]) : 0;
 
     const titleM = fragment.match(/title="([^"]+)"/i);
