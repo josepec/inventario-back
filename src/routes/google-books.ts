@@ -34,7 +34,9 @@ function mapVolume(v: GBVolume) {
   const isbn13 = ids.find(i => i.type === 'ISBN_13')?.identifier ?? null;
   const isbn10 = ids.find(i => i.type === 'ISBN_10')?.identifier ?? null;
   const price = v.saleInfo?.retailPrice?.amount ?? v.saleInfo?.listPrice?.amount ?? null;
-  const cover = info.imageLinks?.thumbnail?.replace('http://', 'https://') ?? null;
+  const cover = info.imageLinks?.thumbnail
+    ?.replace('http://', 'https://')
+    ?.replace(/zoom=\d/, 'zoom=0') ?? null;
 
   return {
     googleId: v.id,
