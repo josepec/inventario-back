@@ -28,6 +28,14 @@ interface GBVolume {
   };
 }
 
+// Google Books has no dedicated series field — series info is embedded in the title
+// e.g. "Los misterios de la taberna Kamogawa (Taberna Kamogawa 1)"
+function extractSeries(raw: string): { title: string; saga: string | null; sagaNumber: number | null } {
+  const m = raw.match(/\s*\(([^)]+?)\s*[,#\-]?\s*(?:[Vv]ol\.?\s*|#\s*|[Nn]º\s*)?(\d+)\s*\)\s*$/);
+  if (m) return { title: raw.replace(m[0], '').trim(), saga: m[1].trim(), sagaNumber: Number(m[2]) };
+  return { title: raw, saga: null, sagaNumber: null };
+}
+
 function mapVolume(v: GBVolume) {
   const info = v.volumeInfo;
   const ids = info.industryIdentifiers ?? [];
@@ -38,10 +46,14 @@ function mapVolume(v: GBVolume) {
     ?.replace('http://', 'https://')
     ?.replace(/zoom=\d/, 'zoom=0') ?? null;
 
+  const series = extractSeries(info.title ?? '');
+
   return {
     googleId: v.id,
-    title: info.title ?? '',
+    title: series.title,
     subtitle: info.subtitle ?? null,
+    saga: series.saga,
+    sagaNumber: series.sagaNumber,
     authors: info.authors ?? [],
     publisher: info.publisher ?? null,
     publishedDate: info.publishedDate ?? null,
