@@ -125,9 +125,10 @@ comics.post('/', async (c) => {
   const json = (key: string) => { const v = body[key]; return Array.isArray(v) ? JSON.stringify(v) : (typeof v === 'string' ? v : null); };
 
   // Upsert: buscar duplicado
-  // Prioridad: (collection_id + number) > ISBN > (título + collection_id)
-  // El match por colección+número va primero para evitar que Whakoom pise un cómic
-  // existente cuando devuelve ISBN compartido entre varios números (ej. Rurouni Kenshin #4/#5).
+  // Cuando viene con (collection_id + number) — flujo Whakoom — matchea SOLO por esa
+  // pareja. No cae a ISBN porque Whakoom a veces devuelve el mismo ISBN para varios
+  // números (ej. Rurouni Kenshin #4/#5) y sobreescribiría un cómic distinto.
+  // Sin collection_id+number (alta manual / escaneo ISBN), matchea por ISBN o título.
   const isbn = str('isbn');
   const title = str('title');
   const collectionId = num('collection_id');
@@ -138,15 +139,16 @@ comics.post('/', async (c) => {
     existing = await c.env.DB
       .prepare('SELECT id FROM comics WHERE collection_id = ? AND number = ?')
       .bind(collectionId, number).first<{ id: number }>();
-  }
-  if (!existing && isbn) {
-    existing = await c.env.DB
-      .prepare('SELECT id FROM comics WHERE isbn = ?').bind(isbn).first<{ id: number }>();
-  }
-  if (!existing && title && collectionId) {
-    existing = await c.env.DB
-      .prepare('SELECT id FROM comics WHERE title = ? AND collection_id = ?')
-      .bind(title, collectionId).first<{ id: number }>();
+  } else {
+    if (isbn) {
+      existing = await c.env.DB
+        .prepare('SELECT id FROM comics WHERE isbn = ?').bind(isbn).first<{ id: number }>();
+    }
+    if (!existing && title && collectionId) {
+      existing = await c.env.DB
+        .prepare('SELECT id FROM comics WHERE title = ? AND collection_id = ?')
+        .bind(title, collectionId).first<{ id: number }>();
+    }
   }
 
   if (existing) {
