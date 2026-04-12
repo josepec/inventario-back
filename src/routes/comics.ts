@@ -124,13 +124,22 @@ comics.post('/', async (c) => {
   const num = (key: string) => { const v = body[key]; return (v == null || v === '') ? null : Number(v); };
   const json = (key: string) => { const v = body[key]; return Array.isArray(v) ? JSON.stringify(v) : (typeof v === 'string' ? v : null); };
 
-  // Upsert: buscar duplicado por ISBN o por título+colección
+  // Upsert: buscar duplicado
+  // Prioridad: (collection_id + number) > ISBN > (título + collection_id)
+  // El match por colección+número va primero para evitar que Whakoom pise un cómic
+  // existente cuando devuelve ISBN compartido entre varios números (ej. Rurouni Kenshin #4/#5).
   const isbn = str('isbn');
   const title = str('title');
   const collectionId = num('collection_id');
+  const number = num('number');
   let existing: { id: number } | null = null;
 
-  if (isbn) {
+  if (collectionId && number != null) {
+    existing = await c.env.DB
+      .prepare('SELECT id FROM comics WHERE collection_id = ? AND number = ?')
+      .bind(collectionId, number).first<{ id: number }>();
+  }
+  if (!existing && isbn) {
     existing = await c.env.DB
       .prepare('SELECT id FROM comics WHERE isbn = ?').bind(isbn).first<{ id: number }>();
   }
