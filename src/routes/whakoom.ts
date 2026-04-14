@@ -357,11 +357,14 @@ function parseComic(html: string, id: string) {
   const language = itemprop('inLanguage');
 
   // "Sobre esta edición" — páginas, encuadernación, precio
+  // NO fullHtml fallback: la página de un comic individual contiene datos de la
+  // edición padre en sidebars, y fallar al fullHtml los propagaria como per-issue.
+  // Si el comic no tiene su propia seccion "Sobre esta edicion", dejamos null.
   const aboutMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
     ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
     ?? html.match(/Sobre esta edici[oó]n[\s\S]*?<p>([^<]+)<\/p>/i);
   const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
-  const { pages, binding, price } = extractEditionFields(editionDetails, html);
+  const { pages, binding, price } = extractEditionFields(editionDetails);
 
   // Autores con roles desde la sección <h3 class="autores">
   const parseAuthors = (block: string): { name: string; role: string }[] => {

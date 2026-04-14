@@ -6,6 +6,56 @@ const stats = new Hono<AppContext>();
 
 stats.use('*', requireAuth);
 
+// Clasifica cada comic en uno de 7 buckets canonicos:
+// grapa, rustica, cartone, lujo, integral, album, null.
+// Se prefiere col.format (label curado de Whakoom en class="edition-type")
+// porque c.binding/c.pages estaban contaminados con datos de la edicion padre.
+// Para comics sin coleccion se cae a c.binding como fallback.
+//
+// LIKE con '_' matchea tildes ("rustica" → 'r_stica%' matchea 'rústica').
+// El orden del CASE importa: integral/lujo/album van primero porque algunos
+// tomos recopilatorios (Cartoné) tambien son Integrales y queremos etiquetarlos
+// como 'integral', no como 'cartone'.
+const CLASSIFIED_CTE = `
+  WITH classified AS (
+    SELECT
+      LOWER(TRIM(c.publisher)) AS p,
+      c.price,
+      CASE
+        WHEN col.format IS NOT NULL THEN
+          CASE
+            WHEN LOWER(col.format) LIKE '%integral%' THEN 'integral'
+            WHEN LOWER(col.format) LIKE '%lujo%'     THEN 'lujo'
+            WHEN LOWER(col.format) LIKE '%lbum%'     THEN 'album'
+            WHEN LOWER(col.format) LIKE 'grapa%'     THEN 'grapa'
+            WHEN LOWER(col.format) LIKE 'r_stica%'   THEN 'rustica'
+            WHEN LOWER(col.format) LIKE 'softcover%' THEN 'rustica'
+            WHEN LOWER(col.format) LIKE 'tapa blanda%' THEN 'rustica'
+            WHEN LOWER(col.format) LIKE 'bolsillo%'  THEN 'rustica'
+            WHEN LOWER(col.format) LIKE 'carton%'    THEN 'cartone'
+            WHEN LOWER(col.format) LIKE 'tapa dura%' THEN 'cartone'
+            WHEN LOWER(col.format) LIKE 'hardcover%' THEN 'cartone'
+            ELSE 'null'
+          END
+        WHEN c.binding IS NOT NULL THEN
+          CASE
+            WHEN LOWER(c.binding) LIKE '%integral%' THEN 'integral'
+            WHEN LOWER(c.binding) LIKE '%lujo%'     THEN 'lujo'
+            WHEN LOWER(c.binding) LIKE '%lbum%'     THEN 'album'
+            WHEN LOWER(c.binding) LIKE 'grapa%'     THEN 'grapa'
+            WHEN LOWER(c.binding) LIKE 'r_stica%'   THEN 'rustica'
+            WHEN LOWER(c.binding) LIKE 'carton%'    THEN 'cartone'
+            WHEN LOWER(c.binding) LIKE 'tapa dura%' THEN 'cartone'
+            WHEN LOWER(c.binding) LIKE 'tapa blanda%' THEN 'rustica'
+            ELSE 'null'
+          END
+        ELSE 'null'
+      END AS b
+    FROM comics c
+    LEFT JOIN collections col ON col.id = c.collection_id
+  )
+`;
+
 // Basic stats (legacy)
 stats.get('/', async (c) => {
   const [comicsTotal, comicsRead, comicsOwned, booksTotal, booksRead, booksOwned] =
@@ -53,6 +103,7 @@ stats.get('/dashboard', async (c) => {
   const [
     totals, monthlyAdded, monthlyRead, byPublisher, byRating,
     collections, recentComics, totalSpent, yearSummary, prevYearSummary,
+    priceByPubBinding, priceByPub, priceByBinding, unpricedGroups,
   ] = await Promise.all([
     db.prepare(`
       SELECT
@@ -114,6 +165,37 @@ stats.get('/dashboard', async (c) => {
       SELECT COUNT(*) as added, SUM(CASE WHEN read_status = 'read' THEN 1 ELSE 0 END) as read, COALESCE(SUM(price), 0) as spent
       FROM comics WHERE strftime('%Y', created_at) = CAST(strftime('%Y', 'now') AS INTEGER) - 1
     `).first<{ added: number; read: number; spent: number }>(),
+
+    // Price estimation — aggregates for projecting unpriced comics.
+    // Agrupa via CLASSIFIED_CTE (7 buckets canonicos derivados de col.format).
+    // Fallback chain: (publisher+bucket) → publisher → bucket → global avg.
+    db.prepare(`
+      ${CLASSIFIED_CTE}
+      SELECT p, b, AVG(price) a, COUNT(*) n
+      FROM classified WHERE price IS NOT NULL AND price > 0
+      GROUP BY p, b HAVING n >= 3
+    `).all<{ p: string | null; b: string | null; a: number; n: number }>(),
+
+    db.prepare(`
+      ${CLASSIFIED_CTE}
+      SELECT p, AVG(price) a, COUNT(*) n
+      FROM classified WHERE price IS NOT NULL AND price > 0
+      GROUP BY p HAVING n >= 3
+    `).all<{ p: string | null; a: number; n: number }>(),
+
+    db.prepare(`
+      ${CLASSIFIED_CTE}
+      SELECT b, AVG(price) a, COUNT(*) n
+      FROM classified WHERE price IS NOT NULL AND price > 0
+      GROUP BY b HAVING n >= 3
+    `).all<{ b: string | null; a: number; n: number }>(),
+
+    db.prepare(`
+      ${CLASSIFIED_CTE}
+      SELECT p, b, COUNT(*) c
+      FROM classified WHERE price IS NULL OR price = 0
+      GROUP BY p, b
+    `).all<{ p: string | null; b: string | null; c: number }>(),
   ]);
 
   let thisMonthSpent = 0;
@@ -127,6 +209,30 @@ stats.get('/dashboard', async (c) => {
     prevMonthSpent = prevM?.spent ?? 0;
   }
 
+  // Price estimation: project unpriced comics using grouped averages.
+  // Fallback chain: (publisher+binding) → publisher → binding → global avg.
+  const realTotal = totalSpent?.total ?? 0;
+  const realAvg = totalSpent?.avg ?? 0;
+  const totalComics = totals?.total ?? 0;
+  const pbMap = new Map<string, number>();
+  for (const r of priceByPubBinding.results) pbMap.set(`${r.p ?? ''}|${r.b ?? ''}`, r.a);
+  const pMap = new Map<string, number>();
+  for (const r of priceByPub.results) pMap.set(r.p ?? '', r.a);
+  const bMap = new Map<string, number>();
+  for (const r of priceByBinding.results) bMap.set(r.b ?? '', r.a);
+
+  let estimatedMissing = 0;
+  let missingCount = 0;
+  for (const g of unpricedGroups.results) {
+    const key = `${g.p ?? ''}|${g.b ?? ''}`;
+    const est = pbMap.get(key) ?? pMap.get(g.p ?? '') ?? bMap.get(g.b ?? '') ?? realAvg;
+    estimatedMissing += est * g.c;
+    missingCount += g.c;
+  }
+  const estimatedTotal = realTotal + estimatedMissing;
+  const estimatedAvg = totalComics > 0 ? estimatedTotal / totalComics : 0;
+  const missingPct = totalComics > 0 ? (missingCount / totalComics) * 100 : 0;
+
   return c.json({
     totals: {
       comics: totals?.total ?? 0, read: totals?.read ?? 0,
@@ -138,7 +244,14 @@ stats.get('/dashboard', async (c) => {
     byRating: byRating.results,
     collections: collections.results,
     recentComics: recentComics.results,
-    spending: { total: totalSpent?.total ?? 0, avg: totalSpent?.avg ? Math.round(totalSpent.avg * 100) / 100 : 0 },
+    spending: {
+      total: realTotal,
+      avg: realAvg ? Math.round(realAvg * 100) / 100 : 0,
+      estimatedTotal: Math.round(estimatedTotal),
+      estimatedAvg: Math.round(estimatedAvg * 100) / 100,
+      missingCount,
+      missingPct: Math.round(missingPct * 10) / 10,
+    },
     thisYear: yearSummary ?? { added: 0, read: 0, spent: 0 },
     prevYear: prevYearSummary ?? { added: 0, read: 0, spent: 0 },
     monthlySpending: { thisMonth: thisMonthSpent, prevMonth: prevMonthSpent },

@@ -218,7 +218,7 @@ googleBooks.get('/isbn/:isbn', async (c) => {
         data.currency = 'EUR';
       } else {
         data = {
-          googleId: '', title: '', subtitle: null, authors: [],
+          googleId: '', title: '', subtitle: null, saga: null, sagaNumber: null, authors: [],
           publisher: null, publishedDate: null, description: null,
           isbn: cleanIsbn.length === 10 ? cleanIsbn : null,
           isbn13: cleanIsbn.length === 13 ? cleanIsbn : null,
