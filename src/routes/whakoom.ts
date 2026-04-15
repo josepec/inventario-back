@@ -186,7 +186,17 @@ whakoom.get('/comic/:id', async (c) => {
     }
 
     const data = parseComic(html, id);
-    return c.json(data);
+
+    // Look up local collection by Whakoom edition ID
+    let local_collection_id: number | null = null;
+    if (data.editionId) {
+      const row = await c.env.DB.prepare(
+        `SELECT id FROM collections WHERE whakoom_id = ? LIMIT 1`
+      ).bind(data.editionId).first<{ id: number }>();
+      if (row) local_collection_id = row.id;
+    }
+
+    return c.json({ ...data, local_collection_id });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
