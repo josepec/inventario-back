@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 import { paginate, now } from '../db/helpers';
-import { fetchNewTitles, enrichWithOwnership, flattenNewTitles } from './whakoom';
+import { fetchNewTitles, enrichWithOwnership, flattenNewTitles, fetchOwnedWhakoomIds } from './whakoom';
 
 const comics = new Hono<AppContext>();
 
@@ -20,11 +20,8 @@ comics.get('/upcoming-mine', async (c) => {
   const yyyymm = `${year}${mon}`;
   const month = `${year}-${mon}`;
 
-  // Pre-fetch: IDs ya en la coleccion (para excluir de todos lados)
-  const ownedRows = await c.env.DB
-    .prepare("SELECT whakoom_id FROM comics WHERE whakoom_id IS NOT NULL AND whakoom_id != ''")
-    .all<{ whakoom_id: string }>();
-  const ownedSet = new Set(ownedRows.results.map(r => r.whakoom_id));
+  // Pre-fetch: IDs ya en la coleccion (se calcula cruzando collections.issues con comics.number)
+  const ownedSet = await fetchOwnedWhakoomIds(c.env.DB);
 
   // 1) Wanted list de este mes (excluyendo los ya comprados)
   interface WantedRow {

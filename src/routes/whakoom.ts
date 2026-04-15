@@ -216,29 +216,37 @@ export function flattenNewTitles(
 
 type OwnershipFlags = { owned: boolean; wanted: boolean };
 
+// Set de whakoom_comic_id que ya tenemos en la coleccion.
+// Como comics.whakoom_id esta vacio para los registros historicos, cruzamos
+// collections.issues (JSON con {id, number}) con comics por (collection_id, number).
+// Tambien incluimos el fallback de comics.whakoom_id por si algun dia se rellena.
+export async function fetchOwnedWhakoomIds(db: D1Database): Promise<Set<string>> {
+  const rows = await db.prepare(`
+    SELECT DISTINCT json_extract(issue.value, '$.id') AS id
+      FROM collections co, json_each(co.issues) AS issue
+      JOIN comics c
+        ON c.collection_id = co.id
+       AND CAST(c.number AS INTEGER) = CAST(json_extract(issue.value, '$.number') AS INTEGER)
+     WHERE co.issues IS NOT NULL
+    UNION
+    SELECT whakoom_id AS id FROM comics WHERE whakoom_id IS NOT NULL AND whakoom_id != ''
+  `).all<{ id: string }>();
+  return new Set(rows.results.map(r => r.id).filter(Boolean));
+}
+
 // Enriquece items con flags owned/wanted consultando la DB local.
 export async function enrichWithOwnership<T extends { whakoom_comic_id: string }>(
   db: D1Database,
   items: T[],
 ): Promise<Array<T & OwnershipFlags>> {
-  const ids = items.map(i => i.whakoom_comic_id);
-  const ownedSet = new Set<string>();
-  const wantedSet = new Set<string>();
+  if (items.length === 0) return [];
 
-  if (ids.length > 0) {
-    const placeholders = ids.map(() => '?').join(',');
-    const ownedRows = await db
-      .prepare(`SELECT whakoom_id FROM comics WHERE whakoom_id IN (${placeholders})`)
-      .bind(...ids)
-      .all<{ whakoom_id: string }>();
-    for (const r of ownedRows.results) if (r.whakoom_id) ownedSet.add(r.whakoom_id);
+  const ownedSet = await fetchOwnedWhakoomIds(db);
 
-    const wantedRows = await db
-      .prepare(`SELECT whakoom_comic_id FROM wanted_comics WHERE whakoom_comic_id IN (${placeholders})`)
-      .bind(...ids)
-      .all<{ whakoom_comic_id: string }>();
-    for (const r of wantedRows.results) wantedSet.add(r.whakoom_comic_id);
-  }
+  const wantedRows = await db
+    .prepare('SELECT whakoom_comic_id FROM wanted_comics')
+    .all<{ whakoom_comic_id: string }>();
+  const wantedSet = new Set(wantedRows.results.map(r => r.whakoom_comic_id));
 
   return items.map(i => ({
     ...i,
