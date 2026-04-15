@@ -542,6 +542,46 @@ function parseComic(html: string, id: string) {
   const editionMatch = html.match(/href="\/ediciones\/(\d+)[^"]*"/i);
   const editionId = editionMatch ? editionMatch[1] : null;
 
+  // Community rating (Schema.org AggregateRating)
+  const ratingValueM = html.match(/itemprop="ratingValue"[^>]+content="([^"]+)"/i)
+    ?? html.match(/itemprop="ratingValue"[^>]*>([^<]+)/i)
+    ?? html.match(/class="[^"]*score[^"]*"[^>]*>([0-9]+(?:[.,][0-9]+)?)/i);
+  const ratingValue = ratingValueM ? parseFloat(ratingValueM[1].replace(',', '.').trim()) : null;
+
+  const ratingCountM = html.match(/itemprop="ratingCount"[^>]+content="([^"]+)"/i)
+    ?? html.match(/itemprop="reviewCount"[^>]+content="([^"]+)"/i)
+    ?? html.match(/itemprop="ratingCount"[^>]*>([^<]+)/i)
+    ?? html.match(/itemprop="reviewCount"[^>]*>([^<]+)/i);
+  const ratingCount = ratingCountM ? parseInt(ratingCountM[1].trim()) : null;
+
+  // Reviews / user opinions
+  const reviews: { user: string; score: number | null; text: string; date: string | null }[] = [];
+  const reviewSectionM = html.match(/class="[^"]*opinions?[^"]*"[^>]*>([\s\S]+?)(?=<(?:div|section|ul)[^>]+class="(?!(?:[^"]*opinion|[^"]*review)))/i)
+    ?? html.match(/class="[^"]*reviews?[^"]*"[^>]*>([\s\S]+?)(?=<\/(?:section|div)>)/i);
+  if (reviewSectionM) {
+    const itemRe = /<li[^>]*class="[^"]*(?:opinion|review|item)[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+    let rm;
+    while ((rm = itemRe.exec(reviewSectionM[1])) !== null && reviews.length < 10) {
+      const frag = rm[1];
+      const userM = frag.match(/class="[^"]*(?:username|user-name|nickname)[^"]*"[^>]*>([^<]+)/i)
+        ?? frag.match(/href="\/users\/[^"]+">([^<]+)<\/a>/i);
+      const scoreM = frag.match(/itemprop="ratingValue"[^>]*>([^<]+)/i)
+        ?? frag.match(/class="[^"]*(?:score|rating)[^"]*"[^>]*>([0-9]+(?:[.,][0-9]+)?)/i);
+      const textM = frag.match(/class="[^"]*(?:text|comment|body|content)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i);
+      const dateM = frag.match(/class="[^"]*date[^"]*"[^>]*>([^<]+)/i)
+        ?? frag.match(/datetime="([^"]+)"/i);
+      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
+      if (text || scoreM) {
+        reviews.push({
+          user: userM ? userM[1].trim() : '',
+          score: scoreM ? parseFloat(scoreM[1].replace(',', '.')) : null,
+          text,
+          date: dateM ? dateM[1].trim() : null,
+        });
+      }
+    }
+  }
+
   return {
     id,
     title: title || series + (number ? ` #${number}` : ''),
@@ -559,6 +599,9 @@ function parseComic(html: string, id: string) {
     binding,
     price,
     editionId,
+    ratingValue,
+    ratingCount,
+    reviews,
     url: `https://www.whakoom.com/comics/${id}`,
   };
 }
@@ -816,6 +859,46 @@ function parseEdition(html: string, id: string) {
   // Sort by number ascending
   issues.sort((a, b) => a.number - b.number);
 
+  // Community rating
+  const edRatingValueM = html.match(/itemprop="ratingValue"[^>]+content="([^"]+)"/i)
+    ?? html.match(/itemprop="ratingValue"[^>]*>([^<]+)/i)
+    ?? html.match(/class="[^"]*score[^"]*"[^>]*>([0-9]+(?:[.,][0-9]+)?)/i);
+  const edRatingValue = edRatingValueM ? parseFloat(edRatingValueM[1].replace(',', '.').trim()) : null;
+
+  const edRatingCountM = html.match(/itemprop="ratingCount"[^>]+content="([^"]+)"/i)
+    ?? html.match(/itemprop="reviewCount"[^>]+content="([^"]+)"/i)
+    ?? html.match(/itemprop="ratingCount"[^>]*>([^<]+)/i)
+    ?? html.match(/itemprop="reviewCount"[^>]*>([^<]+)/i);
+  const edRatingCount = edRatingCountM ? parseInt(edRatingCountM[1].trim()) : null;
+
+  // Reviews
+  const edReviews: { user: string; score: number | null; text: string; date: string | null }[] = [];
+  const edReviewSectionM = html.match(/class="[^"]*opinions?[^"]*"[^>]*>([\s\S]+?)(?=<\/(?:section|div)>)/i)
+    ?? html.match(/class="[^"]*reviews?[^"]*"[^>]*>([\s\S]+?)(?=<\/(?:section|div)>)/i);
+  if (edReviewSectionM) {
+    const itemRe = /<li[^>]*class="[^"]*(?:opinion|review|item)[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+    let rm;
+    while ((rm = itemRe.exec(edReviewSectionM[1])) !== null && edReviews.length < 10) {
+      const frag = rm[1];
+      const userM = frag.match(/class="[^"]*(?:username|user-name|nickname)[^"]*"[^>]*>([^<]+)/i)
+        ?? frag.match(/href="\/users\/[^"]+">([^<]+)<\/a>/i);
+      const scoreM = frag.match(/itemprop="ratingValue"[^>]*>([^<]+)/i)
+        ?? frag.match(/class="[^"]*(?:score|rating)[^"]*"[^>]*>([0-9]+(?:[.,][0-9]+)?)/i);
+      const textM = frag.match(/class="[^"]*(?:text|comment|body|content)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i);
+      const dateM = frag.match(/class="[^"]*date[^"]*"[^>]*>([^<]+)/i)
+        ?? frag.match(/datetime="([^"]+)"/i);
+      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
+      if (text || scoreM) {
+        edReviews.push({
+          user: userM ? userM[1].trim() : '',
+          score: scoreM ? parseFloat(scoreM[1].replace(',', '.')) : null,
+          text,
+          date: dateM ? dateM[1].trim() : null,
+        });
+      }
+    }
+  }
+
   return {
     id,
     title,
@@ -832,6 +915,9 @@ function parseEdition(html: string, id: string) {
     synopsis,
     authors,
     issues,
+    ratingValue: edRatingValue,
+    ratingCount: edRatingCount,
+    reviews: edReviews,
     url: `https://www.whakoom.com/ediciones/${id}`,
   };
 }
