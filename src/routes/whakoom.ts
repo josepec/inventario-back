@@ -214,34 +214,61 @@ export function flattenNewTitles(
   return groups.flatMap(g => g.items);
 }
 
-type OwnershipFlags = { owned: boolean; wanted: boolean };
+type OwnershipFlags = { owned: boolean; wanted: boolean; local_collection_id: number | null };
 
-// Set de whakoom_comic_id que ya tenemos en la coleccion.
-// Como comics.whakoom_id esta vacio para los registros historicos, cruzamos
-// collections.issues (JSON con {id, number}) con comics por (collection_id, number).
-// Tambien incluimos el fallback de comics.whakoom_id por si algun dia se rellena.
-export async function fetchOwnedWhakoomIds(db: D1Database): Promise<Set<string>> {
+// Construye los mapas de ownership en un solo lote de queries.
+// Devuelve:
+//   ownedSet  — whakoom_comic_ids que ya tenemos en la coleccion
+//   collMap   — whakoom_comic_id → local collection.id (para items propios)
+export async function fetchOwnershipMaps(db: D1Database): Promise<{
+  ownedSet: Set<string>;
+  collMap: Map<string, number>;
+}> {
   const rows = await db.prepare(`
-    SELECT DISTINCT json_extract(issue.value, '$.id') AS id
+    SELECT json_extract(issue.value, '$.id') AS wk_id,
+           co.id                             AS col_id
       FROM collections co, json_each(co.issues) AS issue
       JOIN comics c
         ON c.collection_id = co.id
        AND CAST(c.number AS INTEGER) = CAST(json_extract(issue.value, '$.number') AS INTEGER)
      WHERE co.issues IS NOT NULL
-    UNION
-    SELECT whakoom_id AS id FROM comics WHERE whakoom_id IS NOT NULL AND whakoom_id != ''
-  `).all<{ id: string }>();
-  return new Set(rows.results.map(r => r.id).filter(Boolean));
+  `).all<{ wk_id: string; col_id: number }>();
+
+  const ownedSet = new Set<string>();
+  const collMap = new Map<string, number>();
+  for (const r of rows.results) {
+    if (r.wk_id) {
+      ownedSet.add(r.wk_id);
+      collMap.set(r.wk_id, r.col_id);
+    }
+  }
+
+  // Fallback: comics.whakoom_id (para futuros imports que lo rellenen)
+  const byId = await db
+    .prepare("SELECT whakoom_id, collection_id FROM comics WHERE whakoom_id IS NOT NULL AND whakoom_id != '' AND collection_id IS NOT NULL")
+    .all<{ whakoom_id: string; collection_id: number }>();
+  for (const r of byId.results) {
+    ownedSet.add(r.whakoom_id);
+    if (!collMap.has(r.whakoom_id)) collMap.set(r.whakoom_id, r.collection_id);
+  }
+
+  return { ownedSet, collMap };
 }
 
-// Enriquece items con flags owned/wanted consultando la DB local.
+// Compatibilidad: solo el Set (para comics.ts que solo lo necesita para filtrar)
+export async function fetchOwnedWhakoomIds(db: D1Database): Promise<Set<string>> {
+  const { ownedSet } = await fetchOwnershipMaps(db);
+  return ownedSet;
+}
+
+// Enriquece items con flags owned/wanted/local_collection_id consultando la DB local.
 export async function enrichWithOwnership<T extends { whakoom_comic_id: string }>(
   db: D1Database,
   items: T[],
 ): Promise<Array<T & OwnershipFlags>> {
   if (items.length === 0) return [];
 
-  const ownedSet = await fetchOwnedWhakoomIds(db);
+  const { ownedSet, collMap } = await fetchOwnershipMaps(db);
 
   const wantedRows = await db
     .prepare('SELECT whakoom_comic_id FROM wanted_comics')
@@ -252,6 +279,7 @@ export async function enrichWithOwnership<T extends { whakoom_comic_id: string }
     ...i,
     owned: ownedSet.has(i.whakoom_comic_id),
     wanted: wantedSet.has(i.whakoom_comic_id),
+    local_collection_id: collMap.get(i.whakoom_comic_id) ?? null,
   }));
 }
 
