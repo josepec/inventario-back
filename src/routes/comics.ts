@@ -2,14 +2,14 @@ import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 import { paginate, now } from '../db/helpers';
-import { fetchNewTitles, enrichWithOwnership } from './whakoom';
+import { fetchNewTitles, enrichWithOwnership, flattenNewTitles } from './whakoom';
 
 const comics = new Hono<AppContext>();
 
 comics.use('*', requireAuth);
 
 // GET /comics/upcoming-mine — novedades de este mes que me interesan.
-// Combina dos fuentes:
+// Combina dos fuentes y EXCLUYE lo que ya tengo en la coleccion:
 //  1) wanted_comics.release_month = mes actual (wishlist explicita)
 //  2) Scrape de Whakoom /newtitles/YYYYMM filtrando a issues de colecciones
 //     con tracking=1 (cruzando whakoom_comic_id contra collections.issues JSON).
@@ -20,7 +20,13 @@ comics.get('/upcoming-mine', async (c) => {
   const yyyymm = `${year}${mon}`;
   const month = `${year}-${mon}`;
 
-  // 1) Wanted list de este mes
+  // Pre-fetch: IDs ya en la coleccion (para excluir de todos lados)
+  const ownedRows = await c.env.DB
+    .prepare("SELECT whakoom_id FROM comics WHERE whakoom_id IS NOT NULL AND whakoom_id != ''")
+    .all<{ whakoom_id: string }>();
+  const ownedSet = new Set(ownedRows.results.map(r => r.whakoom_id));
+
+  // 1) Wanted list de este mes (excluyendo los ya comprados)
   interface WantedRow {
     whakoom_comic_id: string;
     title: string;
@@ -39,18 +45,22 @@ comics.get('/upcoming-mine', async (c) => {
       ORDER BY series, number`
   ).bind(month).all<WantedRow>();
 
-  const wantedItems = wantedRows.results.map(r => ({
-    ...r,
-    source: 'wanted' as const,
-    owned: false,
-    wanted: true,
-  }));
+  const wantedItems = wantedRows.results
+    .filter(r => !ownedSet.has(r.whakoom_comic_id))
+    .map(r => ({
+      ...r,
+      source: 'wanted' as const,
+      release_week: null as string | null,
+      release_week_start: null as string | null,
+      owned: false,
+      wanted: true,
+    }));
 
   // 2) Novedades de Whakoom cruzadas con colecciones trackeadas
   let trackedItems: Array<Record<string, unknown> & { source: 'tracked'; owned: boolean; wanted: boolean }> = [];
   try {
-    const items = await fetchNewTitles(c.env, yyyymm);
-    if (items && items.length > 0) {
+    const groups = await fetchNewTitles(c.env, yyyymm);
+    if (groups && groups.length > 0) {
       const trackedIssueIds = await c.env.DB.prepare(
         `SELECT DISTINCT json_extract(issue.value, '$.id') AS id
            FROM collections, json_each(collections.issues) AS issue
@@ -59,7 +69,10 @@ comics.get('/upcoming-mine', async (c) => {
       ).all<{ id: string }>();
       const trackedSet = new Set(trackedIssueIds.results.map(r => r.id));
 
-      const filtered = items.filter(it => trackedSet.has(it.whakoom_comic_id));
+      const flat = flattenNewTitles(groups);
+      const filtered = flat.filter(it =>
+        trackedSet.has(it.whakoom_comic_id) && !ownedSet.has(it.whakoom_comic_id)
+      );
       const enriched = await enrichWithOwnership(c.env.DB, filtered);
       trackedItems = enriched.map(it => ({ ...it, source: 'tracked' as const }));
     }

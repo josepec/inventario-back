@@ -207,11 +207,20 @@ export async function fetchNewTitles(
   return parseNewTitles(html, month);
 }
 
+// Aplana los grupos a una lista de items para usos que no necesitan agrupacion.
+export function flattenNewTitles(
+  groups: Array<ReturnType<typeof parseNewTitles>[number]>,
+): Array<ReturnType<typeof parseNewTitles>[number]['items'][number]> {
+  return groups.flatMap(g => g.items);
+}
+
+type OwnershipFlags = { owned: boolean; wanted: boolean };
+
 // Enriquece items con flags owned/wanted consultando la DB local.
 export async function enrichWithOwnership<T extends { whakoom_comic_id: string }>(
   db: D1Database,
   items: T[],
-): Promise<Array<T & { owned: boolean; wanted: boolean }>> {
+): Promise<Array<T & OwnershipFlags>> {
   const ids = items.map(i => i.whakoom_comic_id);
   const ownedSet = new Set<string>();
   const wantedSet = new Set<string>();
@@ -238,16 +247,35 @@ export async function enrichWithOwnership<T extends { whakoom_comic_id: string }
   }));
 }
 
+// Enriquece grupos (mantiene la estructura agrupada).
+export async function enrichGroupsWithOwnership(
+  db: D1Database,
+  groups: Array<ReturnType<typeof parseNewTitles>[number]>,
+): Promise<Array<{
+  week_label: string;
+  week_start: string | null;
+  items: Array<ReturnType<typeof parseNewTitles>[number]['items'][number] & OwnershipFlags>;
+}>> {
+  const flat = flattenNewTitles(groups);
+  const enriched = await enrichWithOwnership(db, flat);
+  const byId = new Map(enriched.map(i => [i.whakoom_comic_id, i]));
+  return groups.map(g => ({
+    week_label: g.week_label,
+    week_start: g.week_start,
+    items: g.items.map(i => byId.get(i.whakoom_comic_id)!).filter(Boolean),
+  }));
+}
+
 // GET /whakoom/newtitles/:yyyymm — novedades del mes (formato YYYYMM, ej 202604)
 whakoom.get('/newtitles/:yyyymm', async (c) => {
   const yyyymm = c.req.param('yyyymm');
   if (!/^\d{6}$/.test(yyyymm)) return c.json({ error: 'yyyymm debe ser YYYYMM' }, 400);
 
   try {
-    const items = await fetchNewTitles(c.env, yyyymm);
-    if (items === null) return c.json({ error: 'No se pudo obtener novedades de Whakoom' }, 502);
-    const enriched = await enrichWithOwnership(c.env.DB, items);
-    return c.json({ month: `${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}`, items: enriched });
+    const groups = await fetchNewTitles(c.env, yyyymm);
+    if (groups === null) return c.json({ error: 'No se pudo obtener novedades de Whakoom' }, 502);
+    const enriched = await enrichGroupsWithOwnership(c.env.DB, groups);
+    return c.json({ month: `${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}`, groups: enriched });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
@@ -509,80 +537,142 @@ interface NewTitleItem {
   collection_whakoom_id: string | null;
   collection_slug: string | null;
   release_month: string;
+  release_week: string | null;     // etiqueta original "del 13 al 19 de abril"
+  release_week_start: string | null; // ISO "YYYY-MM-DD" del lunes de la semana
 }
 
-function parseNewTitles(html: string, month: string): NewTitleItem[] {
-  // Whakoom publica /newtitles/YYYYMM con un <ul class="v2-cover-list ... new-titles">
-  // donde cada <li id="comic<ID>"> es un comic. Reutilizamos el mismo patron que
-  // parseEdition() usa para issues (id="comic..."). Aqui no filtramos por
-  // not-published porque toda la pagina son novedades por definicion.
-  const items: NewTitleItem[] = [];
-  const seen = new Set<string>();
+interface NewTitleGroup {
+  week_label: string;
+  week_start: string | null;
+  items: NewTitleItem[];
+}
 
-  const listMatch = html.match(/<ul[^>]*class="[^"]*new-titles[^"]*"[\s\S]*?<\/ul>/i);
-  const listHtml = listMatch ? listMatch[0] : html;
+const MONTH_NAMES = [
+  'enero','febrero','marzo','abril','mayo','junio',
+  'julio','agosto','septiembre','octubre','noviembre','diciembre',
+];
 
-  const blocks = [...listHtml.matchAll(/<li[^>]*id="comic([^"]+)"[^>]*>[\s\S]*?<\/li>/gi)];
-
-  for (const block of blocks) {
-    const fragment = block[0];
-    const whakoom_comic_id = block[1];
-    if (seen.has(whakoom_comic_id)) continue;
-    seen.add(whakoom_comic_id);
-
-    // title attr de <a class="title">: "<Serie> (<Formato> [<Pages>pp]) [#N]"
-    const titleAttrMatch = fragment.match(/<a[^>]*class="[^"]*title[^"]*"[^>]*title="([^"]+)"/i)
-      ?? fragment.match(/title="([^"]+)"/i);
-    const titleAttr = titleAttrMatch ? titleAttrMatch[1].trim() : '';
-
-    // Numero: de <span class="issue-number"> o fallback al title attr
-    const numSpan = fragment.match(/class="issue-number"[^>]*>([\s\S]*?)<\//i);
-    let number = '';
-    if (numSpan) {
-      const m = numSpan[1].replace(/<[^>]*>/g, '').match(/#?(\d+)/);
-      if (m) number = m[1];
+// "del 13 al 19 de abril" | "del 30 de marzo al 5 de abril" | "del 27 de abril al 3 de mayo"
+// → ISO del dia de inicio. year viene del YYYYMM de la URL.
+function parseWeekLabel(label: string, fallbackYear: number): string | null {
+  const norm = label.toLowerCase();
+  // Forma A: "del D al D de MES"  → mismo mes
+  let m = norm.match(/del\s+(\d{1,2})\s+al\s+(\d{1,2})\s+de\s+([a-z]+)/);
+  if (m) {
+    const day = Number(m[1]);
+    const month = MONTH_NAMES.indexOf(m[3]);
+    if (month >= 0) return `${fallbackYear}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+  // Forma B: "del D de MES al D de MES" → puede cruzar mes
+  m = norm.match(/del\s+(\d{1,2})\s+de\s+([a-z]+)\s+al\s+(\d{1,2})\s+de\s+([a-z]+)/);
+  if (m) {
+    const day = Number(m[1]);
+    const month = MONTH_NAMES.indexOf(m[2]);
+    if (month >= 0) {
+      // Si cruza de diciembre a enero, el anio del inicio es el previo.
+      const endMonth = MONTH_NAMES.indexOf(m[4]);
+      const year = (month === 11 && endMonth === 0) ? fallbackYear - 1 : fallbackYear;
+      return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
-    if (!number) {
-      const titleNumMatch = titleAttr.match(/#(\d+)/);
-      if (titleNumMatch) number = titleNumMatch[1];
-    }
+  }
+  return null;
+}
 
-    // Serie: <strong> dentro del <a>
-    const seriesMatch = fragment.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
-    let series = seriesMatch
-      ? seriesMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
-      : '';
-    if (!series) {
-      // Fallback: primera parte del title attr antes del parentesis
-      const m = titleAttr.match(/^([^(]+)/);
-      if (m) series = m[1].trim();
-    }
+function parseNewTitleLi(fragment: string, comicId: string, month: string, weekLabel: string | null, weekStart: string | null): NewTitleItem {
+  // title attr de <a class="title">: "<Serie> (<Formato> [<Pages>pp]) [#N]"
+  const titleAttrMatch = fragment.match(/<a[^>]*class="[^"]*title[^"]*"[^>]*title="([^"]+)"/i)
+    ?? fragment.match(/title="([^"]+)"/i);
+  const titleAttr = titleAttrMatch ? titleAttrMatch[1].trim() : '';
 
-    // Cover: <img src=...> (convertir thumb→small para consistencia con search)
-    const imgMatch = fragment.match(/<img[^>]+src="([^"]+)"/i);
-    let cover_url = imgMatch ? imgMatch[1] : '';
-    if (cover_url) cover_url = cover_url.replace('/thumb/', '/small/');
-
-    // href: /comics/<COMIC_ID>/<SLUG>/<NUMBER> — el slug permite identificar
-    // la coleccion sin hacer un fetch adicional (matcheando contra collections.title
-    // normalizado via json_each de issues).
-    const hrefMatch = fragment.match(/href="\/comics\/[^/]+\/([^/"]+)\/\d+"/i);
-    const collection_slug = hrefMatch ? hrefMatch[1] : null;
-
-    items.push({
-      whakoom_comic_id,
-      title: titleAttr || (series + (number ? ` #${number}` : '')),
-      series,
-      number,
-      cover_url,
-      publisher: null,
-      collection_whakoom_id: null,
-      collection_slug,
-      release_month: month,
-    });
+  // Numero: de <span class="issue-number"> o fallback al title attr
+  const numSpan = fragment.match(/class="issue-number"[^>]*>([\s\S]*?)<\//i);
+  let number = '';
+  if (numSpan) {
+    const m = numSpan[1].replace(/<[^>]*>/g, '').match(/#?(\d+)/);
+    if (m) number = m[1];
+  }
+  if (!number) {
+    const titleNumMatch = titleAttr.match(/#(\d+)/);
+    if (titleNumMatch) number = titleNumMatch[1];
   }
 
-  return items;
+  // Serie: <strong> dentro del <a>
+  const seriesMatch = fragment.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
+  let series = seriesMatch
+    ? seriesMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
+    : '';
+  if (!series) {
+    const m = titleAttr.match(/^([^(]+)/);
+    if (m) series = m[1].trim();
+  }
+
+  // Cover: <img src=...> (convertir thumb→small para consistencia con search)
+  const imgMatch = fragment.match(/<img[^>]+src="([^"]+)"/i);
+  let cover_url = imgMatch ? imgMatch[1] : '';
+  if (cover_url) cover_url = cover_url.replace('/thumb/', '/small/');
+
+  // href: /comics/<COMIC_ID>/<SLUG>/<NUMBER>
+  const hrefMatch = fragment.match(/href="\/comics\/[^/]+\/([^/"]+)\/\d+"/i);
+  const collection_slug = hrefMatch ? hrefMatch[1] : null;
+
+  return {
+    whakoom_comic_id: comicId,
+    title: titleAttr || (series + (number ? ` #${number}` : '')),
+    series,
+    number,
+    cover_url,
+    publisher: null,
+    collection_whakoom_id: null,
+    collection_slug,
+    release_month: month,
+    release_week: weekLabel,
+    release_week_start: weekStart,
+  };
+}
+
+// Whakoom publica /newtitles/YYYYMM con varios <h2>Novedades del X al Y de MES</h2>
+// seguidos de <ul class="v2-cover-list auto-rows new-titles">. Cada <li id="comic<ID>">
+// es un comic. Recorremos la pagina en orden, arrastrando el header "week" actual
+// para etiquetar cada <li> con su semana de publicacion.
+function parseNewTitles(html: string, month: string): NewTitleGroup[] {
+  const year = Number(month.slice(0, 4));
+  const groups: NewTitleGroup[] = [];
+  const seen = new Set<string>();
+  let currentGroup: NewTitleGroup | null = null;
+
+  // Un solo pase combinando headers de semana y items. Matcheamos lo que venga primero.
+  const combined = /<h2[^>]*>\s*(Novedades\s+del\s+[^<]+?)\s*<\/h2>|<li[^>]*id="comic([^"]+)"[^>]*>([\s\S]*?)<\/li>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = combined.exec(html)) !== null) {
+    if (m[1]) {
+      // Header de semana
+      const rawLabel = m[1].replace(/\s+/g, ' ').trim();
+      const label = rawLabel.replace(/^Novedades\s+/i, '').trim();
+      const weekStart = parseWeekLabel(label, year);
+      currentGroup = { week_label: label, week_start: weekStart, items: [] };
+      groups.push(currentGroup);
+    } else if (m[2]) {
+      const comicId = m[2];
+      const fragment = m[0];
+      if (seen.has(comicId)) continue;
+      seen.add(comicId);
+      const item = parseNewTitleLi(
+        fragment,
+        comicId,
+        month,
+        currentGroup?.week_label ?? null,
+        currentGroup?.week_start ?? null,
+      );
+      if (!currentGroup) {
+        // Items sin header previo (raro): grupo default
+        currentGroup = { week_label: 'Novedades', week_start: null, items: [] };
+        groups.push(currentGroup);
+      }
+      currentGroup.items.push(item);
+    }
+  }
+
+  return groups.filter(g => g.items.length > 0);
 }
 
 function parseEdition(html: string, id: string) {
