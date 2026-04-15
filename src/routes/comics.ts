@@ -59,19 +59,24 @@ comics.get('/upcoming-mine', async (c) => {
     const groups = await fetchNewTitles(c.env, yyyymm);
     if (groups && groups.length > 0) {
       const trackedIssueIds = await c.env.DB.prepare(
-        `SELECT DISTINCT json_extract(issue.value, '$.id') AS id
+        `SELECT DISTINCT json_extract(issue.value, '$.id') AS id, collections.id AS collection_id
            FROM collections, json_each(collections.issues) AS issue
           WHERE collections.tracking = 1
             AND collections.issues IS NOT NULL`
-      ).all<{ id: string }>();
+      ).all<{ id: string; collection_id: number }>();
       const trackedSet = new Set(trackedIssueIds.results.map(r => r.id));
+      const trackedCollMap = new Map(trackedIssueIds.results.map(r => [r.id, r.collection_id]));
 
       const flat = flattenNewTitles(groups);
       const filtered = flat.filter(it =>
         trackedSet.has(it.whakoom_comic_id) && !ownedSet.has(it.whakoom_comic_id)
       );
       const enriched = await enrichWithOwnership(c.env.DB, filtered);
-      trackedItems = enriched.map(it => ({ ...it, source: 'tracked' as const }));
+      trackedItems = enriched.map(it => ({
+        ...it,
+        source: 'tracked' as const,
+        local_collection_id: trackedCollMap.get(String(it.whakoom_comic_id)) ?? (it as unknown as { local_collection_id?: number | null }).local_collection_id ?? null,
+      }));
     }
   } catch {
     // Si el scraper falla, devolvemos al menos la wanted list
