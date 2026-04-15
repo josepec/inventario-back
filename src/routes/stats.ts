@@ -145,6 +145,7 @@ stats.get('/dashboard', async (c) => {
         (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) as owned
       FROM collections c
       WHERE c.total_issues > 0
+        AND c.tracking = 1
         AND (SELECT COUNT(*) FROM comics WHERE collection_id = c.id) < c.total_issues
       ORDER BY (CAST((SELECT COUNT(*) FROM comics WHERE collection_id = c.id) AS REAL) / c.total_issues) DESC
       LIMIT 8
