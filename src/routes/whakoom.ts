@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { D1Database } from '@cloudflare/workers-types';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 
@@ -186,6 +187,67 @@ whakoom.get('/comic/:id', async (c) => {
 
     const data = parseComic(html, id);
     return c.json(data);
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
+// Fetch + parse de /newtitles/YYYYMM reusable desde otros endpoints.
+// Devuelve null si no se pudo (para que el caller decida que devolver).
+export async function fetchNewTitles(
+  env: { WHAKOOM_USER: string; WHAKOOM_PASS: string },
+  yyyymm: string,
+): Promise<Array<ReturnType<typeof parseNewTitles>[number]> | null> {
+  if (!/^\d{6}$/.test(yyyymm)) return null;
+  const month = `${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}`;
+  const res = await whakoomFetch(`https://www.whakoom.com/newtitles/${yyyymm}`, env);
+  if (!res.ok) return null;
+  const html = await res.text();
+  if (html.includes('/login?ReturnUrl')) return null;
+  return parseNewTitles(html, month);
+}
+
+// Enriquece items con flags owned/wanted consultando la DB local.
+export async function enrichWithOwnership<T extends { whakoom_comic_id: string }>(
+  db: D1Database,
+  items: T[],
+): Promise<Array<T & { owned: boolean; wanted: boolean }>> {
+  const ids = items.map(i => i.whakoom_comic_id);
+  const ownedSet = new Set<string>();
+  const wantedSet = new Set<string>();
+
+  if (ids.length > 0) {
+    const placeholders = ids.map(() => '?').join(',');
+    const ownedRows = await db
+      .prepare(`SELECT whakoom_id FROM comics WHERE whakoom_id IN (${placeholders})`)
+      .bind(...ids)
+      .all<{ whakoom_id: string }>();
+    for (const r of ownedRows.results) if (r.whakoom_id) ownedSet.add(r.whakoom_id);
+
+    const wantedRows = await db
+      .prepare(`SELECT whakoom_comic_id FROM wanted_comics WHERE whakoom_comic_id IN (${placeholders})`)
+      .bind(...ids)
+      .all<{ whakoom_comic_id: string }>();
+    for (const r of wantedRows.results) wantedSet.add(r.whakoom_comic_id);
+  }
+
+  return items.map(i => ({
+    ...i,
+    owned: ownedSet.has(i.whakoom_comic_id),
+    wanted: wantedSet.has(i.whakoom_comic_id),
+  }));
+}
+
+// GET /whakoom/newtitles/:yyyymm — novedades del mes (formato YYYYMM, ej 202604)
+whakoom.get('/newtitles/:yyyymm', async (c) => {
+  const yyyymm = c.req.param('yyyymm');
+  if (!/^\d{6}$/.test(yyyymm)) return c.json({ error: 'yyyymm debe ser YYYYMM' }, 400);
+
+  try {
+    const items = await fetchNewTitles(c.env, yyyymm);
+    if (items === null) return c.json({ error: 'No se pudo obtener novedades de Whakoom' }, 502);
+    const enriched = await enrichWithOwnership(c.env.DB, items);
+    return c.json({ month: `${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}`, items: enriched });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
@@ -435,6 +497,92 @@ function parseComic(html: string, id: string) {
     editionId,
     url: `https://www.whakoom.com/comics/${id}`,
   };
+}
+
+interface NewTitleItem {
+  whakoom_comic_id: string;
+  title: string;
+  series: string;
+  number: string;
+  cover_url: string;
+  publisher: string | null;
+  collection_whakoom_id: string | null;
+  collection_slug: string | null;
+  release_month: string;
+}
+
+function parseNewTitles(html: string, month: string): NewTitleItem[] {
+  // Whakoom publica /newtitles/YYYYMM con un <ul class="v2-cover-list ... new-titles">
+  // donde cada <li id="comic<ID>"> es un comic. Reutilizamos el mismo patron que
+  // parseEdition() usa para issues (id="comic..."). Aqui no filtramos por
+  // not-published porque toda la pagina son novedades por definicion.
+  const items: NewTitleItem[] = [];
+  const seen = new Set<string>();
+
+  const listMatch = html.match(/<ul[^>]*class="[^"]*new-titles[^"]*"[\s\S]*?<\/ul>/i);
+  const listHtml = listMatch ? listMatch[0] : html;
+
+  const blocks = [...listHtml.matchAll(/<li[^>]*id="comic([^"]+)"[^>]*>[\s\S]*?<\/li>/gi)];
+
+  for (const block of blocks) {
+    const fragment = block[0];
+    const whakoom_comic_id = block[1];
+    if (seen.has(whakoom_comic_id)) continue;
+    seen.add(whakoom_comic_id);
+
+    // title attr de <a class="title">: "<Serie> (<Formato> [<Pages>pp]) [#N]"
+    const titleAttrMatch = fragment.match(/<a[^>]*class="[^"]*title[^"]*"[^>]*title="([^"]+)"/i)
+      ?? fragment.match(/title="([^"]+)"/i);
+    const titleAttr = titleAttrMatch ? titleAttrMatch[1].trim() : '';
+
+    // Numero: de <span class="issue-number"> o fallback al title attr
+    const numSpan = fragment.match(/class="issue-number"[^>]*>([\s\S]*?)<\//i);
+    let number = '';
+    if (numSpan) {
+      const m = numSpan[1].replace(/<[^>]*>/g, '').match(/#?(\d+)/);
+      if (m) number = m[1];
+    }
+    if (!number) {
+      const titleNumMatch = titleAttr.match(/#(\d+)/);
+      if (titleNumMatch) number = titleNumMatch[1];
+    }
+
+    // Serie: <strong> dentro del <a>
+    const seriesMatch = fragment.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
+    let series = seriesMatch
+      ? seriesMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
+      : '';
+    if (!series) {
+      // Fallback: primera parte del title attr antes del parentesis
+      const m = titleAttr.match(/^([^(]+)/);
+      if (m) series = m[1].trim();
+    }
+
+    // Cover: <img src=...> (convertir thumb→small para consistencia con search)
+    const imgMatch = fragment.match(/<img[^>]+src="([^"]+)"/i);
+    let cover_url = imgMatch ? imgMatch[1] : '';
+    if (cover_url) cover_url = cover_url.replace('/thumb/', '/small/');
+
+    // href: /comics/<COMIC_ID>/<SLUG>/<NUMBER> — el slug permite identificar
+    // la coleccion sin hacer un fetch adicional (matcheando contra collections.title
+    // normalizado via json_each de issues).
+    const hrefMatch = fragment.match(/href="\/comics\/[^/]+\/([^/"]+)\/\d+"/i);
+    const collection_slug = hrefMatch ? hrefMatch[1] : null;
+
+    items.push({
+      whakoom_comic_id,
+      title: titleAttr || (series + (number ? ` #${number}` : '')),
+      series,
+      number,
+      cover_url,
+      publisher: null,
+      collection_whakoom_id: null,
+      collection_slug,
+      release_month: month,
+    });
+  }
+
+  return items;
 }
 
 function parseEdition(html: string, id: string) {

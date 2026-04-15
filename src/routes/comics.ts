@@ -2,10 +2,80 @@ import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 import { paginate, now } from '../db/helpers';
+import { fetchNewTitles, enrichWithOwnership } from './whakoom';
 
 const comics = new Hono<AppContext>();
 
 comics.use('*', requireAuth);
+
+// GET /comics/upcoming-mine — novedades de este mes que me interesan.
+// Combina dos fuentes:
+//  1) wanted_comics.release_month = mes actual (wishlist explicita)
+//  2) Scrape de Whakoom /newtitles/YYYYMM filtrando a issues de colecciones
+//     con tracking=1 (cruzando whakoom_comic_id contra collections.issues JSON).
+comics.get('/upcoming-mine', async (c) => {
+  const now_ = new Date();
+  const year = now_.getUTCFullYear();
+  const mon = String(now_.getUTCMonth() + 1).padStart(2, '0');
+  const yyyymm = `${year}${mon}`;
+  const month = `${year}-${mon}`;
+
+  // 1) Wanted list de este mes
+  interface WantedRow {
+    whakoom_comic_id: string;
+    title: string;
+    series: string | null;
+    number: string | null;
+    cover_url: string | null;
+    publisher: string | null;
+    collection_whakoom_id: string | null;
+    release_month: string | null;
+  }
+  const wantedRows = await c.env.DB.prepare(
+    `SELECT whakoom_comic_id, title, series, number, cover_url, publisher,
+            collection_whakoom_id, release_month
+       FROM wanted_comics
+      WHERE release_month = ?
+      ORDER BY series, number`
+  ).bind(month).all<WantedRow>();
+
+  const wantedItems = wantedRows.results.map(r => ({
+    ...r,
+    source: 'wanted' as const,
+    owned: false,
+    wanted: true,
+  }));
+
+  // 2) Novedades de Whakoom cruzadas con colecciones trackeadas
+  let trackedItems: Array<Record<string, unknown> & { source: 'tracked'; owned: boolean; wanted: boolean }> = [];
+  try {
+    const items = await fetchNewTitles(c.env, yyyymm);
+    if (items && items.length > 0) {
+      const trackedIssueIds = await c.env.DB.prepare(
+        `SELECT DISTINCT json_extract(issue.value, '$.id') AS id
+           FROM collections, json_each(collections.issues) AS issue
+          WHERE collections.tracking = 1
+            AND collections.issues IS NOT NULL`
+      ).all<{ id: string }>();
+      const trackedSet = new Set(trackedIssueIds.results.map(r => r.id));
+
+      const filtered = items.filter(it => trackedSet.has(it.whakoom_comic_id));
+      const enriched = await enrichWithOwnership(c.env.DB, filtered);
+      trackedItems = enriched.map(it => ({ ...it, source: 'tracked' as const }));
+    }
+  } catch {
+    // Si el scraper falla, devolvemos al menos la wanted list
+  }
+
+  // Dedupe: wanted gana si aparece en ambas fuentes
+  const wantedIds = new Set(wantedItems.map(i => String(i.whakoom_comic_id)));
+  const merged = [
+    ...wantedItems,
+    ...trackedItems.filter(i => !wantedIds.has(String(i.whakoom_comic_id))),
+  ];
+
+  return c.json({ month, items: merged });
+});
 
 // GET /comics/facets — valores distintos para filtros
 comics.get('/facets', async (c) => {
@@ -168,6 +238,7 @@ comics.post('/', async (c) => {
         collection_id=COALESCE(?,collection_id),
         price=COALESCE(?,price), binding=COALESCE(?,binding),
         authors=COALESCE(?,authors),
+        whakoom_id=COALESCE(?,whakoom_id),
         updated_at=?
       WHERE id=?
     `).bind(
@@ -181,8 +252,15 @@ comics.post('/', async (c) => {
       num('pages'), str('language'), str('cover_url'),
       num('collection_id'), num('price'), str('binding'),
       json('authors'),
+      str('whakoom_id'),
       now(), existing.id
     ).run();
+
+    const whakoomId = str('whakoom_id');
+    if (whakoomId) {
+      await c.env.DB.prepare('DELETE FROM wanted_comics WHERE whakoom_comic_id = ?')
+        .bind(whakoomId).run();
+    }
 
     const comic = await c.env.DB
       .prepare('SELECT * FROM comics WHERE id = ?').bind(existing.id).first<Record<string, unknown>>();
@@ -196,9 +274,9 @@ comics.post('/', async (c) => {
       publisher, collection, publish_date, original_publisher, original_title,
       synopsis, genre, format, pages, language, cover_url,
       read_status, owned, rating, notes,
-      collection_id, price, binding, authors,
+      collection_id, price, binding, authors, whakoom_id,
       created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
     str('title'),
     str('series'), num('number'), num('volume'),
@@ -212,8 +290,15 @@ comics.post('/', async (c) => {
     body['owned'] ? 1 : 0,
     num('rating'), str('notes'),
     num('collection_id'), num('price'), str('binding'), json('authors'),
+    str('whakoom_id'),
     now(), now()
   ).run();
+
+  const whakoomId = str('whakoom_id');
+  if (whakoomId) {
+    await c.env.DB.prepare('DELETE FROM wanted_comics WHERE whakoom_comic_id = ?')
+      .bind(whakoomId).run();
+  }
 
   const comic = await c.env.DB
     .prepare('SELECT * FROM comics WHERE id = ?')
