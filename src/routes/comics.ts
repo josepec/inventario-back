@@ -156,7 +156,29 @@ comics.get('/atrasados', async (c) => {
     });
   }
 
-  return c.json({ data: Array.from(map.values()) });
+  // Segunda fuente: wanted_comics de meses pasados aún sin comprar
+  const now_ = new Date();
+  const currentMonth = `${now_.getUTCFullYear()}-${String(now_.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  interface WantedPastRow {
+    whakoom_comic_id: string;
+    title: string;
+    series: string | null;
+    number: string | null;
+    cover_url: string | null;
+    publisher: string | null;
+    release_month: string | null;
+  }
+
+  const wantedPast = await c.env.DB.prepare(`
+    SELECT whakoom_comic_id, title, series, number, cover_url, publisher, release_month
+      FROM wanted_comics
+     WHERE release_month IS NOT NULL
+       AND release_month < ?
+     ORDER BY release_month DESC, title
+  `).bind(currentMonth).all<WantedPastRow>();
+
+  return c.json({ data: Array.from(map.values()), wanted_past: wantedPast.results });
 });
 
 // GET /comics/facets — valores distintos para filtros
