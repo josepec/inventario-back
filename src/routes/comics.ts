@@ -94,6 +94,71 @@ comics.get('/upcoming-mine', async (c) => {
   return c.json({ month, items: merged });
 });
 
+// GET /comics/atrasados — colecciones con tracking=1 que tienen issues publicadas sin comprar
+comics.get('/atrasados', async (c) => {
+  interface AtrasadoRow {
+    collection_id: number;
+    collection_title: string;
+    collection_cover: string | null;
+    collection_whakoom_id: string | null;
+    issue_number: number;
+    issue_title: string;
+    issue_cover: string | null;
+    issue_release_date: string | null;
+  }
+
+  const rows = await c.env.DB.prepare(`
+    SELECT
+      co.id                                                    AS collection_id,
+      co.title                                                 AS collection_title,
+      co.cover_url                                             AS collection_cover,
+      co.whakoom_id                                            AS collection_whakoom_id,
+      CAST(json_extract(issue.value, '$.number') AS INTEGER)   AS issue_number,
+      COALESCE(json_extract(issue.value, '$.title'), '')       AS issue_title,
+      json_extract(issue.value, '$.cover')                     AS issue_cover,
+      json_extract(issue.value, '$.releaseDate')               AS issue_release_date
+    FROM collections co, json_each(co.issues) AS issue
+    WHERE co.tracking = 1
+      AND co.issues IS NOT NULL
+      AND json_extract(issue.value, '$.published') = 1
+      AND NOT EXISTS (
+        SELECT 1 FROM comics c
+        WHERE c.collection_id = co.id
+          AND CAST(c.number AS INTEGER) = CAST(json_extract(issue.value, '$.number') AS INTEGER)
+      )
+    ORDER BY co.title, CAST(json_extract(issue.value, '$.number') AS INTEGER)
+  `).all<AtrasadoRow>();
+
+  // Agrupar por coleccion
+  const map = new Map<number, {
+    collection_id: number;
+    collection_title: string;
+    collection_cover: string | null;
+    collection_whakoom_id: string | null;
+    missing_issues: { number: number; title: string; cover: string | null; release_date: string | null }[];
+  }>();
+
+  for (const row of rows.results) {
+    if (!map.has(row.collection_id)) {
+      map.set(row.collection_id, {
+        collection_id: row.collection_id,
+        collection_title: row.collection_title,
+        collection_cover: row.collection_cover,
+        collection_whakoom_id: row.collection_whakoom_id,
+        missing_issues: [],
+      });
+    }
+    map.get(row.collection_id)!.missing_issues.push({
+      number: row.issue_number,
+      title: row.issue_title,
+      cover: row.issue_cover,
+      release_date: row.issue_release_date,
+    });
+  }
+
+  return c.json({ data: Array.from(map.values()) });
+});
+
 // GET /comics/facets — valores distintos para filtros
 comics.get('/facets', async (c) => {
   const [authors, publishers, priceRange] = await Promise.all([
