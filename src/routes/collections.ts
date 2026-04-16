@@ -54,6 +54,14 @@ collections.get('/', async (c) => {
   const statusFilter = c.req.query('status');
   if (statusFilter) { conditions.push('status = ?'); params.push(statusFilter); }
 
+  const readFilter = c.req.query('read');
+  if (readFilter === 'unread') {
+    conditions.push(`EXISTS (SELECT 1 FROM comics WHERE comics.collection_id = collections.id AND comics.read_status != 'read')`);
+  } else if (readFilter === 'read') {
+    conditions.push(`EXISTS (SELECT 1 FROM comics WHERE comics.collection_id = collections.id)`);
+    conditions.push(`NOT EXISTS (SELECT 1 FROM comics WHERE comics.collection_id = collections.id AND comics.read_status != 'read')`);
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await paginate<Record<string, unknown>>(
     c.env.DB, 'collections', where, params, page, limit, `${safeSort} ${order}`
