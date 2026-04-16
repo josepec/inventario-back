@@ -1,0 +1,4 @@
+-- tracking: 0 = no tracking, 1 = coleccionando, 2 = siguiendo
+-- Previously boolean (0/1), now three-state integer.
+-- No schema change needed — column is already INTEGER.
+-- This migration exists only as documentation of the semantic change.

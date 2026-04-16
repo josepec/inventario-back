@@ -59,13 +59,14 @@ comics.get('/upcoming-mine', async (c) => {
     const groups = await fetchNewTitles(c.env, yyyymm);
     if (groups && groups.length > 0) {
       const trackedIssueIds = await c.env.DB.prepare(
-        `SELECT DISTINCT json_extract(issue.value, '$.id') AS id, collections.id AS collection_id
+        `SELECT DISTINCT json_extract(issue.value, '$.id') AS id, collections.id AS collection_id, collections.tracking AS tracking_mode
            FROM collections, json_each(collections.issues) AS issue
-          WHERE collections.tracking = 1
+          WHERE collections.tracking >= 1
             AND collections.issues IS NOT NULL`
-      ).all<{ id: string; collection_id: number }>();
+      ).all<{ id: string; collection_id: number; tracking_mode: number }>();
       const trackedSet = new Set(trackedIssueIds.results.map(r => r.id));
       const trackedCollMap = new Map(trackedIssueIds.results.map(r => [r.id, r.collection_id]));
+      const trackedModeMap = new Map(trackedIssueIds.results.map(r => [r.id, r.tracking_mode]));
 
       const flat = flattenNewTitles(groups);
       const filtered = flat.filter(it =>
@@ -75,6 +76,7 @@ comics.get('/upcoming-mine', async (c) => {
       trackedItems = enriched.map(it => ({
         ...it,
         source: 'tracked' as const,
+        tracking_mode: trackedModeMap.get(String(it.whakoom_comic_id)) ?? 1,
         local_collection_id: trackedCollMap.get(String(it.whakoom_comic_id)) ?? (it as unknown as { local_collection_id?: number | null }).local_collection_id ?? null,
       }));
     }

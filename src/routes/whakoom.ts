@@ -128,6 +128,26 @@ async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PA
   return res;
 }
 
+// TEMP debug — remove after fixing scraper
+whakoom.get('/debug-html/:id', async (c) => {
+  const id = c.req.param('id');
+  const res = await whakoomFetch(`https://www.whakoom.com/comics/${id}`, c.env);
+  if (!res.ok) return c.json({ error: res.status }, 502);
+  const html = await res.text();
+  // Find review-related sections by searching for known user names or patterns
+  const chunks: string[] = [];
+  for (const marker of ['spider_cat', 'javiramos', 'fsegura', 'ha valorado', 'opinion', 'review', 'comment']) {
+    const idx = html.indexOf(marker);
+    if (idx > -1) {
+      chunks.push(`[${marker} at ${idx}]: ` + html.substring(Math.max(0, idx - 500), idx + 500));
+    }
+  }
+  // Also get the ratingValue area
+  const rvIdx = html.indexOf('ratingValue');
+  if (rvIdx > -1) chunks.push(`[ratingValue at ${rvIdx}]: ` + html.substring(Math.max(0, rvIdx - 200), rvIdx + 200));
+  return c.json({ htmlLen: html.length, chunks });
+});
+
 whakoom.use('*', requireAuth);
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────

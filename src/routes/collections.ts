@@ -8,9 +8,11 @@ const collections = new Hono<AppContext>();
 collections.use('*', requireAuth);
 
 function parseCol(r: Record<string, unknown>) {
+  const raw = Number(r['tracking'] ?? 0);
   return {
     ...r,
-    tracking: r['tracking'] === 1,
+    tracking: raw >= 1,
+    tracking_mode: raw as 0 | 1 | 2,
     authors: r['authors'] ? JSON.parse(r['authors'] as string) : [],
     issues: r['issues'] ? JSON.parse(r['issues'] as string) : [],
   };
@@ -42,6 +44,15 @@ collections.get('/', async (c) => {
     params.push(author);
   }
   if (publisher) { conditions.push('publisher = ?'); params.push(publisher); }
+
+  const trackingFilter = c.req.query('tracking');
+  if (trackingFilter === 'coleccionando') { conditions.push('tracking = 1'); }
+  else if (trackingFilter === 'siguiendo') { conditions.push('tracking = 2'); }
+  else if (trackingFilter === 'active') { conditions.push('tracking >= 1'); }
+  else if (trackingFilter === 'none') { conditions.push('tracking = 0'); }
+
+  const statusFilter = c.req.query('status');
+  if (statusFilter) { conditions.push('status = ?'); params.push(statusFilter); }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await paginate<Record<string, unknown>>(
@@ -185,7 +196,9 @@ collections.put('/:id', async (c) => {
     .prepare('SELECT id FROM collections WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ error: 'No encontrada' }, 404);
 
-  const tracking = body['tracking'] != null ? (body['tracking'] ? 1 : 0) : null;
+  const tracking = body['tracking_mode'] != null
+    ? Number(body['tracking_mode'])
+    : body['tracking'] != null ? (body['tracking'] ? 1 : 0) : null;
 
   await c.env.DB.prepare(`
     UPDATE collections SET
