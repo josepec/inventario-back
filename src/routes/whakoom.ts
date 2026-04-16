@@ -128,26 +128,6 @@ async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PA
   return res;
 }
 
-// TEMP debug — remove after fixing scraper
-whakoom.get('/debug-html/:id', async (c) => {
-  const id = c.req.param('id');
-  const res = await whakoomFetch(`https://www.whakoom.com/comics/${id}`, c.env);
-  if (!res.ok) return c.json({ error: res.status }, 502);
-  const html = await res.text();
-  // Find review-related sections by searching for known user names or patterns
-  const chunks: string[] = [];
-  for (const marker of ['spider_cat', 'javiramos', 'fsegura', 'ha valorado', 'opinion', 'review', 'comment']) {
-    const idx = html.indexOf(marker);
-    if (idx > -1) {
-      chunks.push(`[${marker} at ${idx}]: ` + html.substring(Math.max(0, idx - 500), idx + 500));
-    }
-  }
-  // Also get the ratingValue area
-  const rvIdx = html.indexOf('ratingValue');
-  if (rvIdx > -1) chunks.push(`[ratingValue at ${rvIdx}]: ` + html.substring(Math.max(0, rvIdx - 200), rvIdx + 200));
-  return c.json({ htmlLen: html.length, chunks });
-});
-
 whakoom.use('*', requireAuth);
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -584,29 +564,29 @@ function parseComic(html: string, id: string) {
     ?? html.match(/itemprop="reviewCount"[^>]*>([^<]+)/i);
   const ratingCount = ratingCountM ? parseInt(ratingCountM[1].trim()) : null;
 
-  // Reviews / user opinions
-  const reviews: { user: string; score: number | null; text: string; date: string | null }[] = [];
-  const reviewSectionM = html.match(/class="[^"]*opinions?[^"]*"[^>]*>([\s\S]+?)(?=<(?:div|section|ul)[^>]+class="(?!(?:[^"]*opinion|[^"]*review)))/i)
-    ?? html.match(/class="[^"]*reviews?[^"]*"[^>]*>([\s\S]+?)(?=<\/(?:section|div)>)/i);
-  if (reviewSectionM) {
-    const itemRe = /<li[^>]*class="[^"]*(?:opinion|review|item)[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+  // Reviews / user opinions — Whakoom uses <div class="reviews-lst"> with
+  // <div class="review comment_..." itemprop="review"> for each review.
+  const reviews: { user: string; score: number | null; text: string }[] = [];
+  const reviewsLstM = html.match(/class="reviews-lst">([\s\S]+?)(?=<div class="(?!review\b)|$)/i);
+  if (reviewsLstM) {
+    const itemRe = /<div[^>]+class="review\s[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+class="review\s|$)/gi;
     let rm;
-    while ((rm = itemRe.exec(reviewSectionM[1])) !== null && reviews.length < 10) {
+    while ((rm = itemRe.exec(reviewsLstM[1])) !== null && reviews.length < 20) {
       const frag = rm[1];
-      const userM = frag.match(/class="[^"]*(?:username|user-name|nickname)[^"]*"[^>]*>([^<]+)/i)
-        ?? frag.match(/href="\/users\/[^"]+">([^<]+)<\/a>/i);
-      const scoreM = frag.match(/itemprop="ratingValue"[^>]*>([^<]+)/i)
-        ?? frag.match(/class="[^"]*(?:score|rating)[^"]*"[^>]*>([0-9]+(?:[.,][0-9]+)?)/i);
-      const textM = frag.match(/class="[^"]*(?:text|comment|body|content)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i);
-      const dateM = frag.match(/class="[^"]*date[^"]*"[^>]*>([^<]+)/i)
-        ?? frag.match(/datetime="([^"]+)"/i);
-      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
-      if (text || scoreM) {
+      const userM = frag.match(/itemprop="author">([^<]+)/i)
+        ?? frag.match(/href="\/([^"]+)"[^>]*itemprop="author"/i);
+      const scoreM = frag.match(/itemprop="ratingValue">([^<]+)/i)
+        ?? frag.match(/style="width:(\d+)%"/i);
+      const textM = frag.match(/itemprop="reviewBody">([\s\S]*?)(?:<\/p>|$)/i);
+      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').trim() : '';
+      const scoreVal = scoreM
+        ? (scoreM[1].includes('%') ? null : parseFloat(scoreM[1].replace(',', '.')))
+        : null;
+      if (text || scoreVal) {
         reviews.push({
           user: userM ? userM[1].trim() : '',
-          score: scoreM ? parseFloat(scoreM[1].replace(',', '.')) : null,
+          score: scoreVal,
           text,
-          date: dateM ? dateM[1].trim() : null,
         });
       }
     }
@@ -631,7 +611,7 @@ function parseComic(html: string, id: string) {
     editionId,
     ratingValue,
     ratingCount,
-    reviews,
+    reviews: reviews.length > 0 ? reviews : [],
     url: `https://www.whakoom.com/comics/${id}`,
   };
 }
@@ -901,30 +881,22 @@ function parseEdition(html: string, id: string) {
     ?? html.match(/itemprop="reviewCount"[^>]*>([^<]+)/i);
   const edRatingCount = edRatingCountM ? parseInt(edRatingCountM[1].trim()) : null;
 
-  // Reviews
-  const edReviews: { user: string; score: number | null; text: string; date: string | null }[] = [];
-  const edReviewSectionM = html.match(/class="[^"]*opinions?[^"]*"[^>]*>([\s\S]+?)(?=<\/(?:section|div)>)/i)
-    ?? html.match(/class="[^"]*reviews?[^"]*"[^>]*>([\s\S]+?)(?=<\/(?:section|div)>)/i);
-  if (edReviewSectionM) {
-    const itemRe = /<li[^>]*class="[^"]*(?:opinion|review|item)[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
+  // Reviews — same structure as parseComic
+  const edReviews: { user: string; score: number | null; text: string }[] = [];
+  const edReviewsLstM = html.match(/class="reviews-lst">([\s\S]+?)(?=<div class="(?!review\b)|$)/i);
+  if (edReviewsLstM) {
+    const itemRe = /<div[^>]+class="review\s[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+class="review\s|$)/gi;
     let rm;
-    while ((rm = itemRe.exec(edReviewSectionM[1])) !== null && edReviews.length < 10) {
+    while ((rm = itemRe.exec(edReviewsLstM[1])) !== null && edReviews.length < 20) {
       const frag = rm[1];
-      const userM = frag.match(/class="[^"]*(?:username|user-name|nickname)[^"]*"[^>]*>([^<]+)/i)
-        ?? frag.match(/href="\/users\/[^"]+">([^<]+)<\/a>/i);
-      const scoreM = frag.match(/itemprop="ratingValue"[^>]*>([^<]+)/i)
-        ?? frag.match(/class="[^"]*(?:score|rating)[^"]*"[^>]*>([0-9]+(?:[.,][0-9]+)?)/i);
-      const textM = frag.match(/class="[^"]*(?:text|comment|body|content)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i);
-      const dateM = frag.match(/class="[^"]*date[^"]*"[^>]*>([^<]+)/i)
-        ?? frag.match(/datetime="([^"]+)"/i);
-      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
-      if (text || scoreM) {
-        edReviews.push({
-          user: userM ? userM[1].trim() : '',
-          score: scoreM ? parseFloat(scoreM[1].replace(',', '.')) : null,
-          text,
-          date: dateM ? dateM[1].trim() : null,
-        });
+      const userM = frag.match(/itemprop="author">([^<]+)/i)
+        ?? frag.match(/href="\/([^"]+)"[^>]*itemprop="author"/i);
+      const scoreM = frag.match(/itemprop="ratingValue">([^<]+)/i);
+      const textM = frag.match(/itemprop="reviewBody">([\s\S]*?)(?:<\/p>|$)/i);
+      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').trim() : '';
+      const scoreVal = scoreM ? parseFloat(scoreM[1].replace(',', '.')) : null;
+      if (text || scoreVal) {
+        edReviews.push({ user: userM ? userM[1].trim() : '', score: scoreVal, text });
       }
     }
   }
