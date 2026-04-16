@@ -81,7 +81,7 @@ async function login(user: string, pass: string): Promise<string> {
   return [...cookieMap.values()].join('; ');
 }
 
-async function ensureSession(env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }): Promise<string> {
+export async function ensureSession(env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }): Promise<string> {
   if (sessionCookie && sessionCookie.includes('.WHAKOOMUSER=') && !sessionCookie.includes('.WHAKOOMUSER=;')) {
     return sessionCookie;
   }
@@ -89,7 +89,7 @@ async function ensureSession(env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }
   return sessionCookie;
 }
 
-async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }, options?: RequestInit): Promise<Response> {
+export async function whakoomFetch(url: string, env: { WHAKOOM_USER: string; WHAKOOM_PASS: string }, options?: RequestInit): Promise<Response> {
   let cookie = await ensureSession(env);
 
   const res = await fetch(url, {
@@ -172,9 +172,16 @@ whakoom.get('/search', async (c) => {
 whakoom.get('/comic/:id', async (c) => {
   const id = c.req.param('id');
   const type = c.req.query('type') ?? 'comic';
+  // url_path: ruta completa almacenada en wanted_comics (ej /comics/12345/slug/4).
+  // Tiene prioridad sobre el ID numerico, que puede no resolver en Whakoom.
+  const urlPath = c.req.query('url_path');
+  const isEditionUrl = urlPath?.startsWith('/ediciones/');
+  const effectiveType = isEditionUrl ? 'edition' : type;
   const url = type === 'edition'
     ? `https://www.whakoom.com/ediciones/${id}`
-    : `https://www.whakoom.com/comics/${id}`;
+    : urlPath
+      ? `https://www.whakoom.com${urlPath}`
+      : `https://www.whakoom.com/comics/${id}`;
 
   try {
     const res = await whakoomFetch(url, c.env);
@@ -185,14 +192,17 @@ whakoom.get('/comic/:id', async (c) => {
       return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
     }
 
-    const data = parseComic(html, id);
+    const data = effectiveType === 'edition'
+      ? parseEdition(html, id)
+      : parseComic(html, id);
 
     // Look up local collection by Whakoom edition ID
     let local_collection_id: number | null = null;
-    if (data.editionId) {
+    const edId = 'editionId' in data ? data.editionId : data.id;
+    if (edId) {
       const row = await c.env.DB.prepare(
         `SELECT id FROM collections WHERE whakoom_id = ? LIMIT 1`
-      ).bind(data.editionId).first<{ id: number }>();
+      ).bind(edId).first<{ id: number }>();
       if (row) local_collection_id = row.id;
     }
 
@@ -625,6 +635,7 @@ interface NewTitleItem {
   publisher: string | null;
   collection_whakoom_id: string | null;
   collection_slug: string | null;
+  comics_url_path: string | null;   // ruta completa ej /comics/12345/slug/4
   release_month: string;
   release_week: string | null;     // etiqueta original "del 13 al 19 de abril"
   release_week_start: string | null; // ISO "YYYY-MM-DD" del lunes de la semana
@@ -700,9 +711,11 @@ function parseNewTitleLi(fragment: string, comicId: string, month: string, weekL
   let cover_url = imgMatch ? imgMatch[1] : '';
   if (cover_url) cover_url = cover_url.replace('/thumb/', '/small/');
 
-  // href: /comics/<COMIC_ID>/<SLUG>/<NUMBER>
-  const hrefMatch = fragment.match(/href="\/comics\/[^/]+\/([^/"]+)\/\d+"/i);
-  const collection_slug = hrefMatch ? hrefMatch[1] : null;
+  // href: /comics/<SERIES_ID>/<SLUG>/<NUMBER> — capturamos la ruta completa
+  // para poder hacer fetch del detalle sin depender de que /comics/<item_id> resuelva.
+  const hrefMatch = fragment.match(/href="(\/comics\/[^/"]+\/[^/"]+\/\d+)"/i);
+  const comics_url_path = hrefMatch ? hrefMatch[1] : null;
+  const collection_slug = comics_url_path ? comics_url_path.split('/')[2] : null;
 
   return {
     whakoom_comic_id: comicId,
@@ -713,6 +726,7 @@ function parseNewTitleLi(fragment: string, comicId: string, month: string, weekL
     publisher: null,
     collection_whakoom_id: null,
     collection_slug,
+    comics_url_path,
     release_month: month,
     release_week: weekLabel,
     release_week_start: weekStart,

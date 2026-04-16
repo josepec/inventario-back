@@ -32,11 +32,12 @@ comics.get('/upcoming-mine', async (c) => {
     cover_url: string | null;
     publisher: string | null;
     collection_whakoom_id: string | null;
+    comics_url_path: string | null;
     release_month: string | null;
   }
   const wantedRows = await c.env.DB.prepare(
     `SELECT whakoom_comic_id, title, series, number, cover_url, publisher,
-            collection_whakoom_id, release_month
+            collection_whakoom_id, comics_url_path, release_month
        FROM wanted_comics
       WHERE release_month = ?
       ORDER BY series, number`
@@ -167,11 +168,12 @@ comics.get('/atrasados', async (c) => {
     number: string | null;
     cover_url: string | null;
     publisher: string | null;
+    comics_url_path: string | null;
     release_month: string | null;
   }
 
   const wantedPast = await c.env.DB.prepare(`
-    SELECT whakoom_comic_id, title, series, number, cover_url, publisher, release_month
+    SELECT whakoom_comic_id, title, series, number, cover_url, publisher, comics_url_path, release_month
       FROM wanted_comics
      WHERE release_month IS NOT NULL
        AND release_month < ?
