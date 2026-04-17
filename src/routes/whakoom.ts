@@ -779,12 +779,26 @@ function parseNewTitles(html: string, month: string): NewTitleGroup[] {
 }
 
 function parseEdition(html: string, id: string) {
-  // Header info
-  const titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
-  const title = titleMatch ? titleMatch[1].trim() : '';
+  // og tags — fallback universal para titulo/cover/descripcion
+  const og = (prop: string): string => {
+    const m = html.match(new RegExp(`property=["']og:${prop}["'][^>]+content=["']([^"']+)`, 'i'))
+      ?? html.match(new RegExp(`content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
+    return m ? m[1].trim() : '';
+  };
 
-  const pubMatch = html.match(/class="publisher"[^>]*>\s*<a[^>]*>([^<]+)/i);
-  const publisher = pubMatch ? pubMatch[1].trim() : '';
+  // Header info — h1 primero, og:title como fallback (strip "(Editorial)" final)
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const h1Raw = h1Match ? h1Match[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
+  const title = h1Raw || og('title').replace(/\s*\([^)]+\)\s*$/, '');
+
+  // Publisher: class="publisher", itemprop="publisher" o parentesis final del og:title
+  const pubMatch = html.match(/class="publisher"[^>]*>\s*<a[^>]*>([^<]+)/i)
+    ?? html.match(/itemprop="publisher"[^>]*>([\s\S]*?)<\//i);
+  let publisher = pubMatch ? pubMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  if (!publisher) {
+    const ogPubMatch = og('title').match(/\(([^)]+)\)\s*$/);
+    if (ogPubMatch) publisher = ogPubMatch[1];
+  }
 
   const issuesCountMatch = html.match(/(\d+)\s*cómics/i);
   const totalIssues = issuesCountMatch ? Number(issuesCountMatch[1]) : 0;
@@ -795,8 +809,9 @@ function parseEdition(html: string, id: string) {
   const statusMatch = html.match(/class="status\s*[^"]*"[^>]*>([^<]+)/i);
   const status = statusMatch ? statusMatch[1].trim() : '';
 
+  // Cover: data-item-img, luego og:image como fallback
   const coverMatch = html.match(/data-item-img="([^"]+)"/i);
-  const cover = coverMatch ? coverMatch[1] : '';
+  const cover = coverMatch ? coverMatch[1] : og('image');
 
   // "Sobre esta edición" → edition details (format, size, etc.)
   const aboutEdMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
