@@ -711,11 +711,15 @@ function parseNewTitleLi(fragment: string, comicId: string, month: string, weekL
   let cover_url = imgMatch ? imgMatch[1] : '';
   if (cover_url) cover_url = cover_url.replace('/thumb/', '/small/');
 
-  // href: /comics/<SERIES_ID>/<SLUG>/<NUMBER> — capturamos la ruta completa
-  // para poder hacer fetch del detalle sin depender de que /comics/<item_id> resuelva.
-  const hrefMatch = fragment.match(/href="(\/comics\/[^/"]+\/[^/"]+\/\d+)"/i);
+  // href: puede ser /comics/<SERIES_ID>/<SLUG>/<NUMBER> (issue de coleccion)
+  // o /ediciones/<EDITION_ID>/<SLUG> (integral / one-shot). Guardamos la ruta
+  // completa para hacer fetch sin depender de que /comics/<item_id> resuelva.
+  const hrefMatch = fragment.match(/href="(\/comics\/[^/"]+\/[^/"]+\/\d+)"/i)
+    ?? fragment.match(/href="(\/ediciones\/[^"]+)"/i);
   const comics_url_path = hrefMatch ? hrefMatch[1] : null;
-  const collection_slug = comics_url_path ? comics_url_path.split('/')[2] : null;
+  const collection_slug = comics_url_path?.startsWith('/comics/')
+    ? comics_url_path.split('/')[2]
+    : null;
 
   return {
     whakoom_comic_id: comicId,
@@ -812,6 +816,10 @@ function parseEdition(html: string, id: string) {
   // Cover: data-item-img, luego og:image como fallback
   const coverMatch = html.match(/data-item-img="([^"]+)"/i);
   const cover = coverMatch ? coverMatch[1] : og('image');
+
+  // Fecha de publicacion (para derivar release_month en el front)
+  const dateRaw = html.match(/itemprop="datePublished"[^>]+content="([^"]+)"/i);
+  const date = dateRaw ? dateRaw[1] : '';
 
   // "Sobre esta edición" → edition details (format, size, etc.)
   const aboutEdMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
@@ -946,7 +954,7 @@ function parseEdition(html: string, id: string) {
     synopsis,
     authors: authors.map(a => a.name),
     structuredAuthors: authors,
-    date: '',
+    date,
     series: title,
     number: '',
     isbn: '',
