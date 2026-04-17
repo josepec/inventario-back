@@ -807,6 +807,8 @@ function parseEdition(html: string, id: string) {
   const issuesCountMatch = html.match(/(\d+)\s*cómics/i);
   const totalIssues = issuesCountMatch ? Number(issuesCountMatch[1]) : 0;
 
+  const isOneShot = /class="bi-detail[^"]*\boneshot\b[^"]*"/i.test(html);
+
   const typeMatch = html.match(/class="edition-type"[^>]*>([^<]+)/i);
   const format = typeMatch ? typeMatch[1].trim() : '';
 
@@ -943,6 +945,7 @@ function parseEdition(html: string, id: string) {
     title,
     publisher,
     totalIssues,
+    isOneShot,
     format,
     status,
     cover,
