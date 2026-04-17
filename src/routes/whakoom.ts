@@ -198,7 +198,7 @@ whakoom.get('/comic/:id', async (c) => {
 
     // Look up local collection by Whakoom edition ID
     let local_collection_id: number | null = null;
-    const edId = 'editionId' in data ? data.editionId : data.id;
+    const edId = data.editionId || data.id;
     if (edId) {
       const row = await c.env.DB.prepare(
         `SELECT id FROM collections WHERE whakoom_id = ? LIMIT 1`
@@ -929,7 +929,14 @@ function parseEdition(html: string, id: string) {
     binding: editionBinding,
     price: editionPrice,
     synopsis,
-    authors,
+    authors: authors.map(a => a.name),
+    structuredAuthors: authors,
+    date: '',
+    series: title,
+    number: '',
+    isbn: '',
+    language: '',
+    editionId: id,
     issues,
     ratingValue: edRatingValue,
     ratingCount: edRatingCount,
