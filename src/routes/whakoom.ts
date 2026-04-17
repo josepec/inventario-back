@@ -206,11 +206,56 @@ whakoom.get('/comic/:id', async (c) => {
       if (row) local_collection_id = row.id;
     }
 
-    return c.json({ ...data, local_collection_id });
+    // Para comics individuales dentro de una coleccion, el subtitulo del
+    // ejemplar solo aparece en la pagina de la edicion padre, no aqui.
+    // Ej: "DC One-Shot #15" → "Batman: Patrones oscuros 2".
+    let subtitle: string | null = null;
+    if (effectiveType !== 'edition' && data.editionId) {
+      subtitle = await fetchIssueSubtitle(c.env, data.editionId, id);
+    }
+
+    return c.json({ ...data, local_collection_id, subtitle });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
 });
+
+// Extrae el subtitulo especifico de un issue dentro de una edicion multi-issue.
+// Whakoom solo lo expone en el <li id="comic{ID}"> de la pagina de la edicion,
+// dentro del ultimo <span class="title"> (despues del issue-number).
+// Ej: "DC One-Shot" edition → issue #15 subtitle "Batman: Patrones oscuros 2".
+// Devuelve null si no se encuentra o el fetch falla (no critico).
+async function fetchIssueSubtitle(
+  env: { WHAKOOM_USER: string; WHAKOOM_PASS: string },
+  editionId: string,
+  comicId: string,
+): Promise<string | null> {
+  try {
+    const res = await whakoomFetch(`https://www.whakoom.com/ediciones/${editionId}`, env);
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (html.includes('/login?ReturnUrl')) return null;
+    return extractIssueSubtitle(html, comicId);
+  } catch {
+    return null;
+  }
+}
+
+// Puro parser del subtitulo — separado para poder reusarlo con HTML ya cargado
+// (retrofill, tests) sin hacer fetch.
+export function extractIssueSubtitle(html: string, comicId: string): string | null {
+  // Escapar el id por si trae caracteres regex (Whakoom usa base64ish: jP5lI, etc).
+  const escaped = comicId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const liMatch = html.match(new RegExp(`<li[^>]*id="comic${escaped}"[^>]*>[\\s\\S]*?</li>`, 'i'));
+  if (!liMatch) return null;
+  // El subtitulo es el ULTIMO <span class="title"> dentro del <li>.
+  // El primer <span class="title"> puede ser la clase wrapper en otros contextos,
+  // pero en issue items Whakoom solo expone uno, despues de issue-number.
+  const spans = [...liMatch[0].matchAll(/<span class="title">\s*([^<]+)<\/span>/gi)];
+  if (spans.length === 0) return null;
+  const subtitle = spans[spans.length - 1][1].trim();
+  return subtitle || null;
+}
 
 // Fetch + parse de /newtitles/YYYYMM reusable desde otros endpoints.
 // Devuelve null si no se pudo (para que el caller decida que devolver).

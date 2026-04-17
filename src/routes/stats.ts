@@ -151,8 +151,8 @@ stats.get('/dashboard', async (c) => {
       LIMIT 8
     `).all<{ id: number; title: string; total_issues: number; cover_url: string | null; rating: number | null; owned: number }>(),
 
-    db.prepare(`SELECT id, title, cover_url, rating, created_at FROM comics ORDER BY created_at DESC LIMIT 8`
-    ).all<{ id: number; title: string; cover_url: string | null; rating: number | null; created_at: string }>(),
+    db.prepare(`SELECT id, title, subtitle, cover_url, rating, created_at FROM comics ORDER BY created_at DESC LIMIT 8`
+    ).all<{ id: number; title: string; subtitle: string | null; cover_url: string | null; rating: number | null; created_at: string }>(),
 
     db.prepare(`SELECT COALESCE(SUM(price), 0) as total, AVG(price) as avg FROM comics WHERE price IS NOT NULL`
     ).first<{ total: number; avg: number }>(),

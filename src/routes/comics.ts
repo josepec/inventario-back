@@ -236,9 +236,9 @@ comics.get('/', async (c) => {
   const params: unknown[] = [];
 
   if (search) {
-    conditions.push('(title LIKE ? OR series LIKE ? OR writer LIKE ? OR artist LIKE ? OR isbn LIKE ? OR ean LIKE ?)');
+    conditions.push('(title LIKE ? OR subtitle LIKE ? OR series LIKE ? OR writer LIKE ? OR artist LIKE ? OR isbn LIKE ? OR ean LIKE ?)');
     const like = `%${search}%`;
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like);
   }
   if (read_status) { conditions.push('read_status = ?'); params.push(read_status); }
   if (owned !== '') { conditions.push('owned = ?'); params.push(owned === 'true' ? 1 : 0); }
@@ -331,7 +331,7 @@ comics.post('/', async (c) => {
     // Actualizar datos del cómic existente (preservar estado personal)
     await c.env.DB.prepare(`
       UPDATE comics SET
-        title=?, series=?, number=COALESCE(?,number), volume=COALESCE(?,volume),
+        title=?, subtitle=COALESCE(?,subtitle), series=?, number=COALESCE(?,number), volume=COALESCE(?,volume),
         isbn=COALESCE(?,isbn), ean=COALESCE(?,ean),
         writer=COALESCE(?,writer), artist=COALESCE(?,artist),
         colorist=COALESCE(?,colorist), cover_artist=COALESCE(?,cover_artist),
@@ -348,7 +348,7 @@ comics.post('/', async (c) => {
         updated_at=?
       WHERE id=?
     `).bind(
-      str('title'),
+      str('title'), str('subtitle'),
       str('series'), num('number'), num('volume'),
       str('isbn'), str('ean'),
       str('writer'), str('artist'), str('colorist'), str('cover_artist'),
@@ -375,16 +375,16 @@ comics.post('/', async (c) => {
 
   const result = await c.env.DB.prepare(`
     INSERT INTO comics (
-      title, series, number, volume, isbn, ean,
+      title, subtitle, series, number, volume, isbn, ean,
       writer, artist, colorist, cover_artist,
       publisher, collection, publish_date, original_publisher, original_title,
       synopsis, genre, format, pages, language, cover_url,
       read_status, owned, rating, notes,
       collection_id, price, binding, authors, whakoom_id,
       created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).bind(
-    str('title'),
+    str('title'), str('subtitle'),
     str('series'), num('number'), num('volume'),
     str('isbn'), str('ean'),
     str('writer'), str('artist'), str('colorist'), str('cover_artist'),
@@ -428,7 +428,7 @@ comics.put('/:id', async (c) => {
 
   await c.env.DB.prepare(`
     UPDATE comics SET
-      title=?, series=?, number=?, volume=?, isbn=?, ean=?,
+      title=?, subtitle=?, series=?, number=?, volume=?, isbn=?, ean=?,
       writer=?, artist=?, colorist=?, cover_artist=?,
       publisher=?, collection=?, publish_date=?, original_publisher=?, original_title=?,
       synopsis=?, genre=?, format=?, pages=?, language=?, cover_url=?,
@@ -437,7 +437,7 @@ comics.put('/:id', async (c) => {
       updated_at=?
     WHERE id=?
   `).bind(
-    str('title'),
+    str('title'), str('subtitle'),
     str('series'), num('number'), num('volume'),
     str('isbn'), str('ean'),
     str('writer'), str('artist'), str('colorist'), str('cover_artist'),
