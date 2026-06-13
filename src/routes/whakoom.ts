@@ -21,7 +21,7 @@ const BROWSER_HEADERS: Record<string, string> = {
 let sessionCookie = '';
 
 async function login(user: string, pass: string): Promise<string> {
-  // 1. GET login page para obtener cookies y __VIEWSTATE
+  // 1. GET login page para obtener cookies y el anti-forgery token
   const loginPageRes = await fetch('https://www.whakoom.com/login', {
     headers: BROWSER_HEADERS,
     redirect: 'manual',
@@ -36,18 +36,16 @@ async function login(user: string, pass: string): Promise<string> {
     .map(c => c.split(';')[0])
     .join('; ');
 
-  // Extraer campos ASP.NET WebForms
-  const viewStateMatch = loginHtml.match(/name="__VIEWSTATE"[^>]+value="([^"]+)"/i)
-    ?? loginHtml.match(/id="__VIEWSTATE"[^>]+value="([^"]+)"/i);
-  const viewState = viewStateMatch ? viewStateMatch[1] : '';
-
-  const viewStateGenMatch = loginHtml.match(/name="__VIEWSTATEGENERATOR"[^>]+value="([^"]+)"/i);
-  const viewStateGen = viewStateGenMatch ? viewStateGenMatch[1] : '';
+  // Whakoom migró de WebForms (__VIEWSTATE) a MVC: el login ahora exige el
+  // anti-forgery token __RequestVerificationToken, que va duplicado en cookie
+  // (recogida arriba) y en un <input hidden>. Ambos deben enviarse y coincidir.
+  const tokenMatch = loginHtml.match(/name="__RequestVerificationToken"[^>]+value="([^"]+)"/i)
+    ?? loginHtml.match(/value="([^"]+)"[^>]*name="__RequestVerificationToken"/i);
+  const verificationToken = tokenMatch ? tokenMatch[1] : '';
 
   // 2. POST login con credenciales
   const body = new URLSearchParams();
-  if (viewState) body.set('__VIEWSTATE', viewState);
-  if (viewStateGen) body.set('__VIEWSTATEGENERATOR', viewStateGen);
+  if (verificationToken) body.set('__RequestVerificationToken', verificationToken);
   body.set('username', user);
   body.set('userpassw', pass);
   body.set('remember', 'true');
