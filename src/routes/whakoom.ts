@@ -137,31 +137,33 @@ whakoom.get('/search', async (c) => {
   const page = Math.max(1, Number(c.req.query('page') ?? 1));
 
   try {
-    // Whakoom migró de WebForms a MVC: el viejo endpoint JSON search.aspx/Query
-    // (que devolvía {d:{searchResult,...}}) ya no responde con ese contrato.
-    // Raspamos directamente la página de resultados, igual que el resto de
-    // endpoints; parseSearchResults ya espera los bloques div.sresult del HTML.
-    const url = `https://www.whakoom.com/search?q=${encodeURIComponent(q.trim())}&type=comics&page=${page}`;
-    const res = await whakoomFetch(url, c.env);
+    const cookie = await ensureSession(c.env);
+
+    const res = await fetch('https://www.whakoom.com/search.aspx/Query', {
+      method: 'POST',
+      headers: {
+        ...BROWSER_HEADERS,
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': cookie,
+        'Referer': `https://www.whakoom.com/search?q=${encodeURIComponent(q)}&type=comics`,
+      },
+      body: JSON.stringify({ q: q.trim(), ft: '0', fit: '', fp: '', fl: '', p: page }),
+    });
+
     if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
 
-    const html = await res.text();
-    if (html.includes('/login?ReturnUrl')) {
-      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
-    }
-
-    const results = parseSearchResults(html);
-
-    // total: cabecera tipo "1.234 cómics" / "1.234 resultados" si está presente.
-    const totalMatch = html.match(/([\d.,]+)\s*(?:c[oó]mics|resultados)/i);
-    const total = totalMatch
-      ? Number(totalMatch[1].replace(/[.,]/g, ''))
-      : results.length;
-
-    // hasMore: existe enlace a la página siguiente en la paginación.
-    const hasMore = new RegExp(`[?&]page=${page + 1}\\b`).test(html);
-
-    return c.json({ data: results, total, page, hasMore });
+    // Tras migrar de WebForms a MVC, Whakoom dejó de envolver la respuesta en
+    // {d:{...}}: ahora los campos van en la raíz. Soportamos ambas formas.
+    const json = await res.json<Record<string, unknown>>();
+    const payload = (json.d ?? json) as { itemsCount: number; nextPage: number; searchResult: string };
+    const results = parseSearchResults(payload.searchResult ?? '');
+    return c.json({
+      data: results,
+      total: payload.itemsCount,
+      page,
+      hasMore: payload.nextPage > page,
+    });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
@@ -252,7 +254,7 @@ export function extractIssueSubtitle(html: string, comicId: string): string | nu
   // pero en issue items Whakoom solo expone uno, despues de issue-number.
   const spans = [...liMatch[0].matchAll(/<span class="title">\s*([^<]+)<\/span>/gi)];
   if (spans.length === 0) return null;
-  const subtitle = spans[spans.length - 1][1].trim();
+  const subtitle = decodeEntities(spans[spans.length - 1][1].trim());
   return subtitle || null;
 }
 
@@ -450,6 +452,31 @@ whakoom.get('/edition/:id', async (c) => {
 
 // ── Parsers ───────────────────────────────────────────────────────────────────
 
+// Whakoom sirve el texto con entidades HTML (numéricas y nombradas), p.ej.
+// "Fern&#225;ndez", "m&#225;s", "&#128077;". Los parsers raspan HTML, así que
+// hay que decodificarlas o aparecen tal cual por toda la app.
+function decodeEntities(s: string): string {
+  if (!s) return s;
+  return s
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&hellip;/g, '…')
+    .replace(/&mdash;/g, '—')
+    .replace(/&ndash;/g, '–')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+// Limpia un fragmento HTML a texto plano: quita tags, decodifica entidades y
+// normaliza espacios. Punto único por el que pasa todo el texto raspado.
+function clean(s: string): string {
+  return decodeEntities((s ?? '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+}
+
 function parseSearchResults(html: string) {
   const results: { id: string; title: string; cover: string | null; publisher: string; type: string }[] = [];
   const seen = new Set<string>();
@@ -473,7 +500,7 @@ function parseSearchResults(html: string) {
 
     // Título
     const titleMatch = fragment.match(/class="title"[^>]*>\s*<a[^>]*>([^<]+)/i);
-    const title = titleMatch ? titleMatch[1].trim() : id;
+    const title = titleMatch ? decodeEntities(titleMatch[1].trim()) : id;
 
     // Portada
     const imgMatch = fragment.match(/<img[^>]+src="([^"]+)"/i);
@@ -483,7 +510,7 @@ function parseSearchResults(html: string) {
 
     // Editorial
     const pubMatch = fragment.match(/class="pub"[^>]*>([^<]+)/i);
-    const publisher = pubMatch ? pubMatch[1].trim() : '';
+    const publisher = pubMatch ? decodeEntities(pubMatch[1].trim()) : '';
 
     results.push({ id, title, cover, publisher, type });
     if (results.length >= 24) break;
@@ -519,7 +546,7 @@ function parseComic(html: string, id: string) {
   const og = (prop: string): string => {
     const m = html.match(new RegExp(`property=["']og:${prop}["'][^>]+content=["']([^"']+)`, 'i'))
       ?? html.match(new RegExp(`content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
-    return m ? m[1].trim() : '';
+    return m ? decodeEntities(m[1].trim()) : '';
   };
 
   const title = og('title').replace(/\s*\([^)]+\)\s*$/, '') || '';
@@ -530,12 +557,12 @@ function parseComic(html: string, id: string) {
   const itemprop = (prop: string): string => {
     const m = html.match(new RegExp(`itemprop="${prop}"[^>]+content="([^"]+)"`, 'i'))
       ?? html.match(new RegExp(`itemprop="${prop}"[^>]*>([^<]+)`, 'i'));
-    return m ? m[1].trim() : '';
+    return m ? decodeEntities(m[1].trim()) : '';
   };
 
   // Publisher: itemprop, o extraer del og:title "(Editorial)" al final
   const pubMatch = html.match(/itemprop="publisher"[^>]*>([\s\S]*?)<\//i);
-  let publisher = pubMatch ? pubMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  let publisher = pubMatch ? clean(pubMatch[1]) : '';
   if (!publisher) {
     const ogPubMatch = og('title').match(/\(([^)]+)\)\s*$/);
     if (ogPubMatch) publisher = ogPubMatch[1];
@@ -553,7 +580,7 @@ function parseComic(html: string, id: string) {
   const aboutMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
     ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
     ?? html.match(/Sobre esta edici[oó]n[\s\S]*?<p>([^<]+)<\/p>/i);
-  const editionDetails = aboutMatch ? aboutMatch[1].trim() : '';
+  const editionDetails = aboutMatch ? decodeEntities(aboutMatch[1].trim()) : '';
   const { pages, binding, price } = extractEditionFields(editionDetails);
 
   // Autores con roles desde la sección <h3 class="autores">
@@ -562,7 +589,7 @@ function parseComic(html: string, id: string) {
     const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:(?:&nbsp;|\s)\(([^)]+)\))?/gi;
     let m;
     while ((m = re.exec(block)) !== null) {
-      result.push({ name: m[1].trim(), role: m[2]?.trim() ?? '' });
+      result.push({ name: decodeEntities(m[1].trim()), role: decodeEntities(m[2]?.trim() ?? '') });
     }
     return result;
   };
@@ -590,7 +617,7 @@ function parseComic(html: string, id: string) {
   let series = '';
   let number = '';
   if (seriesMatch) {
-    const raw = seriesMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+    const raw = clean(seriesMatch[1]);
     const numPart = raw.match(/#(\d+)\s*$/);
     if (numPart) {
       series = raw.replace(/#\d+\s*$/, '').trim();
@@ -632,13 +659,13 @@ function parseComic(html: string, id: string) {
       const scoreM = frag.match(/itemprop="ratingValue">([^<]+)/i)
         ?? frag.match(/style="width:(\d+)%"/i);
       const textM = frag.match(/itemprop="reviewBody">([\s\S]*?)(?:<\/p>|$)/i);
-      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').trim() : '';
+      const text = textM ? clean(textM[1]) : '';
       const scoreVal = scoreM
         ? (scoreM[1].includes('%') ? null : parseFloat(scoreM[1].replace(',', '.')))
         : null;
       if (text || scoreVal) {
         reviews.push({
-          user: userM ? userM[1].trim() : '',
+          user: userM ? decodeEntities(userM[1].trim()) : '',
           score: scoreVal,
           text,
         });
@@ -726,7 +753,7 @@ function parseNewTitleLi(fragment: string, comicId: string, month: string, weekL
   // title attr de <a class="title">: "<Serie> (<Formato> [<Pages>pp]) [#N]"
   const titleAttrMatch = fragment.match(/<a[^>]*class="[^"]*title[^"]*"[^>]*title="([^"]+)"/i)
     ?? fragment.match(/title="([^"]+)"/i);
-  const titleAttr = titleAttrMatch ? titleAttrMatch[1].trim() : '';
+  const titleAttr = titleAttrMatch ? decodeEntities(titleAttrMatch[1].trim()) : '';
 
   // Numero: de <span class="issue-number"> o fallback al title attr
   const numSpan = fragment.match(/class="issue-number"[^>]*>([\s\S]*?)<\//i);
@@ -742,9 +769,7 @@ function parseNewTitleLi(fragment: string, comicId: string, month: string, weekL
 
   // Serie: <strong> dentro del <a>
   const seriesMatch = fragment.match(/<strong[^>]*>([\s\S]*?)<\/strong>/i);
-  let series = seriesMatch
-    ? seriesMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
-    : '';
+  let series = seriesMatch ? clean(seriesMatch[1]) : '';
   if (!series) {
     const m = titleAttr.match(/^([^(]+)/);
     if (m) series = m[1].trim();
@@ -831,18 +856,18 @@ function parseEdition(html: string, id: string) {
   const og = (prop: string): string => {
     const m = html.match(new RegExp(`property=["']og:${prop}["'][^>]+content=["']([^"']+)`, 'i'))
       ?? html.match(new RegExp(`content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, 'i'));
-    return m ? m[1].trim() : '';
+    return m ? decodeEntities(m[1].trim()) : '';
   };
 
   // Header info — h1 primero, og:title como fallback (strip "(Editorial)" final)
   const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  const h1Raw = h1Match ? h1Match[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim() : '';
+  const h1Raw = h1Match ? clean(h1Match[1]) : '';
   const title = h1Raw || og('title').replace(/\s*\([^)]+\)\s*$/, '');
 
   // Publisher: class="publisher", itemprop="publisher" o parentesis final del og:title
   const pubMatch = html.match(/class="publisher"[^>]*>\s*<a[^>]*>([^<]+)/i)
     ?? html.match(/itemprop="publisher"[^>]*>([\s\S]*?)<\//i);
-  let publisher = pubMatch ? pubMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+  let publisher = pubMatch ? clean(pubMatch[1]) : '';
   if (!publisher) {
     const ogPubMatch = og('title').match(/\(([^)]+)\)\s*$/);
     if (ogPubMatch) publisher = ogPubMatch[1];
@@ -854,10 +879,10 @@ function parseEdition(html: string, id: string) {
   const isOneShot = /class="bi-detail[^"]*\boneshot\b[^"]*"/i.test(html);
 
   const typeMatch = html.match(/class="edition-type"[^>]*>([^<]+)/i);
-  const format = typeMatch ? typeMatch[1].trim() : '';
+  const format = typeMatch ? decodeEntities(typeMatch[1].trim()) : '';
 
   const statusMatch = html.match(/class="status\s*[^"]*"[^>]*>([^<]+)/i);
-  const status = statusMatch ? statusMatch[1].trim() : '';
+  const status = statusMatch ? decodeEntities(statusMatch[1].trim()) : '';
 
   // Cover: data-item-img, luego og:image como fallback
   const coverMatch = html.match(/data-item-img="([^"]+)"/i);
@@ -871,14 +896,14 @@ function parseEdition(html: string, id: string) {
   const aboutEdMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
     ?? html.match(/class="about-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
     ?? html.match(/Sobre esta edici[oó]n[\s\S]*?<p>([^<]+)<\/p>/i);
-  const editionDetails = aboutEdMatch ? aboutEdMatch[1].trim() : '';
+  const editionDetails = aboutEdMatch ? decodeEntities(aboutEdMatch[1].trim()) : '';
   const { pages: editionPages, binding: editionBinding, price: editionPrice } = extractEditionFields(editionDetails, html);
 
   // Argumento (synopsis)
   const argMatch = html.match(/<h2>Argumento<\/h2>\s*<p>([\s\S]*?)<\/p>/i);
   let synopsis = '';
   if (argMatch && !argMatch[1].includes('No conocemos el argumento')) {
-    synopsis = argMatch[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+    synopsis = clean(argMatch[1]);
   }
 
   // og:description as fallback
@@ -892,7 +917,7 @@ function parseEdition(html: string, id: string) {
     const re = /<a[^>]*>(?:<span[^>]*>)?([^<]+)(?:<\/span>)?<\/a>(?:(?:&nbsp;|\s)\(([^)]+)\))?/gi;
     let m;
     while ((m = re.exec(block)) !== null) {
-      authors.push({ name: m[1].trim(), role: m[2]?.trim() ?? '' });
+      authors.push({ name: decodeEntities(m[1].trim()), role: decodeEntities(m[2]?.trim() ?? '') });
     }
     return authors;
   };
@@ -933,10 +958,10 @@ function parseEdition(html: string, id: string) {
     const num = numMatch ? Number(numMatch[1]) : 0;
 
     const titleM = fragment.match(/title="([^"]+)"/i);
-    const issueTitle = titleM ? titleM[1].trim() : '';
+    const issueTitle = titleM ? decodeEntities(titleM[1].trim()) : '';
 
     const subtitleM = fragment.match(/<span class="title">\s*([^<]+)/i);
-    const subtitle = subtitleM ? subtitleM[1].trim() : '';
+    const subtitle = subtitleM ? decodeEntities(subtitleM[1].trim()) : '';
 
     const imgM = fragment.match(/<img[^>]+src="([^"]+)"/i);
     const issueCover = imgM ? imgM[1] : '';
@@ -976,10 +1001,10 @@ function parseEdition(html: string, id: string) {
         ?? frag.match(/href="\/([^"]+)"[^>]*itemprop="author"/i);
       const scoreM = frag.match(/itemprop="ratingValue">([^<]+)/i);
       const textM = frag.match(/itemprop="reviewBody">([\s\S]*?)(?:<\/p>|$)/i);
-      const text = textM ? textM[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').trim() : '';
+      const text = textM ? clean(textM[1]) : '';
       const scoreVal = scoreM ? parseFloat(scoreM[1].replace(',', '.')) : null;
       if (text || scoreVal) {
-        edReviews.push({ user: userM ? userM[1].trim() : '', score: scoreVal, text });
+        edReviews.push({ user: userM ? decodeEntities(userM[1].trim()) : '', score: scoreVal, text });
       }
     }
   }
