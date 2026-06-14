@@ -1,0 +1,96 @@
+[
+  {
+    "results": [
+      {
+        "whakoom_comic_id": "398414",
+        "title": "Crónicas de la Era Glacial",
+        "series": "Crónicas de la Era Glacial",
+        "number": "",
+        "cover_url": "https://i1.whakoom.com/large/01/00/d25b58e5b6454b448496ff82ee98967f.jpg",
+        "publisher": "",
+        "collection_whakoom_id": null,
+        "release_month": "2025-03",
+        "added_at": "2026-04-16 11:01:40",
+        "comics_url_path": "/ediciones/398414/cronicas_de_la_era_glacial-rustica_272-312_pp"
+      },
+      {
+        "whakoom_comic_id": "128215",
+        "title": "Creepy presenta: Bernie Wrightson",
+        "series": "Creepy presenta: Bernie Wrightson",
+        "number": "",
+        "cover_url": "https://i1.whakoom.com/large/3f/3e/b73df35bad474d35be76a2d01ec75f68.jpg",
+        "publisher": "Planeta Cómic",
+        "collection_whakoom_id": null,
+        "release_month": "2013-09",
+        "added_at": "2026-04-16 11:02:03",
+        "comics_url_path": "/ediciones/128215/creepy_presenta_bernie_wrightson-cartone_152_pp"
+      },
+      {
+        "whakoom_comic_id": "128216",
+        "title": "Creepy presenta: Richard Corben",
+        "series": "Creepy presenta: Richard Corben",
+        "number": "",
+        "cover_url": "https://i1.whakoom.com/large/18/0e/b886bad74994476f81d7b6592d8463fd.jpg",
+        "publisher": "Planeta Cómic",
+        "collection_whakoom_id": null,
+        "release_month": "2013-04",
+        "added_at": "2026-04-16 11:02:17",
+        "comics_url_path": "/ediciones/128216/creepy_presenta_richard_corben-cartone_352_pp"
+      },
+      {
+        "whakoom_comic_id": "jtz2H",
+        "title": "Crónicas de la Era Glacial #2",
+        "series": "Crónicas de la Era Glacial",
+        "number": "2",
+        "cover_url": "https://i1.whakoom.com/large/30/07/ae42e485c4c24a1da8db6d425e4db0ff.jpg",
+        "publisher": "Planeta Cómic",
+        "collection_whakoom_id": null,
+        "release_month": "2016-10",
+        "added_at": "2026-05-10 18:19:46",
+        "comics_url_path": "/comics/jtz2H"
+      },
+      {
+        "whakoom_comic_id": "jPxWd",
+        "title": "Supergirl: El Mundo",
+        "series": "Supergirl: El Mundo",
+        "number": "",
+        "cover_url": "https://i1.whakoom.com/large/28/2d/b84b2ae30d1e4ae696c5bd0f9a7b8303.jpg",
+        "publisher": "Panini Comics España",
+        "collection_whakoom_id": null,
+        "release_month": "2026-06",
+        "added_at": "2026-05-17 00:08:22",
+        "comics_url_path": "/comics/jPxWd"
+      },
+      {
+        "whakoom_comic_id": "y9vTh",
+        "title": "Marvel One-Shot #9",
+        "series": "Marvel One-Shot",
+        "number": "9",
+        "cover_url": "https://i1.whakoom.com/large/05/0a/677c1b969ee14f63bbddd47aec4be333.jpg",
+        "publisher": "Panini Comics España",
+        "collection_whakoom_id": null,
+        "release_month": "2025-12",
+        "added_at": "2026-05-19 20:37:11",
+        "comics_url_path": "/comics/y9vTh"
+      }
+    ],
+    "success": true,
+    "meta": {
+      "served_by": "v3-prod",
+      "served_by_region": "WEUR",
+      "served_by_colo": "MRS",
+      "served_by_primary": true,
+      "timings": {
+        "sql_duration_ms": 0.3622
+      },
+      "duration": 0.3622,
+      "changes": 0,
+      "last_row_id": 0,
+      "changed_db": false,
+      "size_after": 4063232,
+      "rows_read": 6,
+      "rows_written": 0,
+      "total_attempts": 1
+    }
+  }
+]
