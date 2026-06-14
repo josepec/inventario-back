@@ -137,30 +137,31 @@ whakoom.get('/search', async (c) => {
   const page = Math.max(1, Number(c.req.query('page') ?? 1));
 
   try {
-    const cookie = await ensureSession(c.env);
-
-    const res = await fetch('https://www.whakoom.com/search.aspx/Query', {
-      method: 'POST',
-      headers: {
-        ...BROWSER_HEADERS,
-        'Content-Type': 'application/json; charset=utf-8',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Cookie': cookie,
-        'Referer': `https://www.whakoom.com/search?q=${encodeURIComponent(q)}&type=comics`,
-      },
-      body: JSON.stringify({ q: q.trim(), ft: '0', fit: '', fp: '', fl: '', p: page }),
-    });
-
+    // Whakoom migró de WebForms a MVC: el viejo endpoint JSON search.aspx/Query
+    // (que devolvía {d:{searchResult,...}}) ya no responde con ese contrato.
+    // Raspamos directamente la página de resultados, igual que el resto de
+    // endpoints; parseSearchResults ya espera los bloques div.sresult del HTML.
+    const url = `https://www.whakoom.com/search?q=${encodeURIComponent(q.trim())}&type=comics&page=${page}`;
+    const res = await whakoomFetch(url, c.env);
     if (!res.ok) return c.json({ error: `Whakoom devolvió ${res.status}` }, 502);
 
-    const json = await res.json<{ d: { itemsCount: number; nextPage: number; searchResult: string } }>();
-    const results = parseSearchResults(json.d.searchResult);
-    return c.json({
-      data: results,
-      total: json.d.itemsCount,
-      page,
-      hasMore: json.d.nextPage > page,
-    });
+    const html = await res.text();
+    if (html.includes('/login?ReturnUrl')) {
+      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
+    }
+
+    const results = parseSearchResults(html);
+
+    // total: cabecera tipo "1.234 cómics" / "1.234 resultados" si está presente.
+    const totalMatch = html.match(/([\d.,]+)\s*(?:c[oó]mics|resultados)/i);
+    const total = totalMatch
+      ? Number(totalMatch[1].replace(/[.,]/g, ''))
+      : results.length;
+
+    // hasMore: existe enlace a la página siguiente en la paginación.
+    const hasMore = new RegExp(`[?&]page=${page + 1}\\b`).test(html);
+
+    return c.json({ data: results, total, page, hasMore });
   } catch (err) {
     return c.json({ error: String(err) }, 500);
   }
