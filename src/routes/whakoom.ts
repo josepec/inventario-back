@@ -384,66 +384,76 @@ whakoom.get('/newtitles/:yyyymm', async (c) => {
 });
 
 // GET /whakoom/edition/:id — obtener info + todos los números de una edición
+// Fetch + parse completo de una edición Whakoom (info base + todos los issues,
+// paginando si hace falta). Reutilizable desde el endpoint HTTP y el cron.
+// Devuelve null si Whakoom no responde o exige login.
+export async function fetchEdition(
+  env: { WHAKOOM_USER: string; WHAKOOM_PASS: string },
+  id: string,
+): Promise<ReturnType<typeof parseEdition> | null> {
+  // 1. Fetch la página base para obtener el slug
+  const baseRes = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, env);
+  if (!baseRes.ok) return null;
+
+  const baseHtml = await baseRes.text();
+  if (baseHtml.includes('/login?ReturnUrl')) return null;
+
+  // 2. Extraer slug de la URL canónica (ediciones/ID/slug)
+  const slugMatch = baseHtml.match(new RegExp(`ediciones/${id}/([a-z0-9_]+)`, 'i'));
+  const slug = slugMatch ? slugMatch[1] : '';
+
+  // 3. Parsear info base (autores, sinopsis, detalles edición)
+  const data = parseEdition(baseHtml, id);
+
+  // 4. Fetch /todos con slug para obtener todos los issues (paginado si hace falta)
+  if (slug) {
+    try {
+      const todosRes = await whakoomFetch(
+        `https://www.whakoom.com/ediciones/${id}/${slug}/todos`, env
+      );
+      if (todosRes.ok) {
+        const todosHtml = await todosRes.text();
+        if (!todosHtml.includes('/login?ReturnUrl')) {
+          const todosData = parseEdition(todosHtml, id);
+          if (todosData.issues.length > data.issues.length) {
+            data.issues = todosData.issues;
+          }
+          // Paginar si faltan issues
+          if (data.totalIssues > 0 && data.issues.length < data.totalIssues) {
+            const seenIds = new Set(data.issues.map((i: { id: string }) => i.id));
+            for (let pg = 2; pg <= 10 && data.issues.length < data.totalIssues; pg++) {
+              try {
+                const pgRes = await whakoomFetch(
+                  `https://www.whakoom.com/ediciones/${id}/${slug}/todos?page=${pg}`, env
+                );
+                if (!pgRes.ok) break;
+                const pgHtml = await pgRes.text();
+                if (pgHtml.includes('/login?ReturnUrl')) break;
+                const pgData = parseEdition(pgHtml, id);
+                if (pgData.issues.length === 0) break;
+                let added = 0;
+                for (const issue of pgData.issues) {
+                  if (!seenIds.has(issue.id)) { seenIds.add(issue.id); data.issues.push(issue); added++; }
+                }
+                if (added === 0) break;
+              } catch { break; }
+            }
+            data.issues.sort((a: { number: number }, b: { number: number }) => a.number - b.number);
+          }
+        }
+      }
+    } catch { /* usar issues de baseHtml como fallback */ }
+  }
+
+  return data;
+}
+
 whakoom.get('/edition/:id', async (c) => {
   const id = c.req.param('id');
 
   try {
-    // 1. Fetch la página base para obtener el slug
-    const baseRes = await whakoomFetch(`https://www.whakoom.com/ediciones/${id}`, c.env);
-    if (!baseRes.ok) return c.json({ error: `Whakoom devolvió ${baseRes.status}` }, 502);
-
-    const baseHtml = await baseRes.text();
-    if (baseHtml.includes('/login?ReturnUrl')) {
-      return c.json({ error: 'No se pudo iniciar sesión en Whakoom' }, 502);
-    }
-
-    // 2. Extraer slug de la URL canónica (ediciones/ID/slug)
-    const slugMatch = baseHtml.match(new RegExp(`ediciones/${id}/([a-z0-9_]+)`, 'i'));
-    const slug = slugMatch ? slugMatch[1] : '';
-
-    // 3. Parsear info base (autores, sinopsis, detalles edición)
-    const data = parseEdition(baseHtml, id);
-
-    // 4. Fetch /todos con slug para obtener todos los issues (paginado si hace falta)
-    if (slug) {
-      try {
-        const todosRes = await whakoomFetch(
-          `https://www.whakoom.com/ediciones/${id}/${slug}/todos`, c.env
-        );
-        if (todosRes.ok) {
-          const todosHtml = await todosRes.text();
-          if (!todosHtml.includes('/login?ReturnUrl')) {
-            const todosData = parseEdition(todosHtml, id);
-            if (todosData.issues.length > data.issues.length) {
-              data.issues = todosData.issues;
-            }
-            // Paginar si faltan issues
-            if (data.totalIssues > 0 && data.issues.length < data.totalIssues) {
-              const seenIds = new Set(data.issues.map((i: { id: string }) => i.id));
-              for (let pg = 2; pg <= 10 && data.issues.length < data.totalIssues; pg++) {
-                try {
-                  const pgRes = await whakoomFetch(
-                    `https://www.whakoom.com/ediciones/${id}/${slug}/todos?page=${pg}`, c.env
-                  );
-                  if (!pgRes.ok) break;
-                  const pgHtml = await pgRes.text();
-                  if (pgHtml.includes('/login?ReturnUrl')) break;
-                  const pgData = parseEdition(pgHtml, id);
-                  if (pgData.issues.length === 0) break;
-                  let added = 0;
-                  for (const issue of pgData.issues) {
-                    if (!seenIds.has(issue.id)) { seenIds.add(issue.id); data.issues.push(issue); added++; }
-                  }
-                  if (added === 0) break;
-                } catch { break; }
-              }
-              data.issues.sort((a: { number: number }, b: { number: number }) => a.number - b.number);
-            }
-          }
-        }
-      } catch { /* usar issues de baseHtml como fallback */ }
-    }
-
+    const data = await fetchEdition(c.env, id);
+    if (!data) return c.json({ error: 'No se pudo obtener la edición de Whakoom' }, 502);
     return c.json(data);
   } catch (err) {
     return c.json({ error: String(err) }, 500);

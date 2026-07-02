@@ -17,5 +17,11 @@ database_id = "d30caec6-a877-4b1f-8fdc-b09711340da5"
 binding = "COVERS"
 bucket_name = "inventario-covers"
 
+# Cron Trigger (gratuito en el plan Free). Refresca a diario el catálogo de
+# números de las colecciones con tracking para que salgan las novedades sin
+# tener que entrar en cada colección. 06:00 UTC (~08:00 España en verano).
+[triggers]
+crons = ["0 6 * * *"]
+
 [dev]
 port = 8787

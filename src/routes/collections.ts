@@ -2,10 +2,19 @@ import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 import { paginate, now } from '../db/helpers';
+import { resyncTrackedCollections } from '../cron';
 
 const collections = new Hono<AppContext>();
 
 collections.use('*', requireAuth);
+
+// POST /collections/resync — fuerza la resincronización del catálogo de todas
+// las colecciones con tracking (lo mismo que hace el cron diario). Útil para
+// que las novedades aparezcan al instante sin esperar al cron.
+collections.post('/resync', async (c) => {
+  const result = await resyncTrackedCollections(c.env);
+  return c.json(result);
+});
 
 function parseCol(r: Record<string, unknown>) {
   const raw = Number(r['tracking'] ?? 0);

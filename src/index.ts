@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { AppContext } from './types';
+import { AppContext, Env } from './types';
+import { resyncTrackedCollections } from './cron';
 import { auth } from './routes/auth';
 import { comics } from './routes/comics';
 import { books } from './routes/books';
@@ -51,4 +52,12 @@ app.get('/health', (c) => c.json({ ok: true, ts: new Date().toISOString() }));
 // 404
 app.notFound((c) => c.json({ error: 'Ruta no encontrada' }, 404));
 
-export default app;
+// Worker con fetch (Hono) + scheduled (Cron Trigger).
+// El cron refresca a diario el catálogo de las colecciones con tracking para que
+// las novedades aparezcan sin tener que entrar en cada colección manualmente.
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(resyncTrackedCollections(env));
+  },
+};
