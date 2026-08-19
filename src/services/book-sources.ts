@@ -264,7 +264,14 @@ export async function googleSearch(
     country: 'ES',
   }, opts.key);
 
-  const res = await safeFetch(url);
+  // Google devuelve 503 de forma esporádica (~1 de cada 5 consultas por ISBN)
+  // aunque tenga la ficha. Un solo reintento lo resuelve casi siempre.
+  let res = await safeFetch(url);
+  if (!res || res.status >= 500) {
+    await new Promise(r => setTimeout(r, 300));
+    res = await safeFetch(url);
+  }
+
   if (!res) return { items: [], total: 0, error: 'Google Books no responde' };
   if (!res.ok) {
     const detail = res.status === 429
