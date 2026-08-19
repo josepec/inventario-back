@@ -5,6 +5,12 @@ export interface Env {
   ESP32_API_KEY: string;
   WHAKOOM_USER: string;
   WHAKOOM_PASS: string;
+  /**
+   * Opcional. Sin ella Google Books aplica la cuota anónima por IP, que en los
+   * Workers (IP compartida) está agotada casi siempre y responde 429.
+   *   wrangler secret put GOOGLE_BOOKS_KEY
+   */
+  GOOGLE_BOOKS_KEY?: string;
 }
 
 export interface JwtPayload {

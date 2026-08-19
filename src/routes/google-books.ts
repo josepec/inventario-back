@@ -1,98 +1,31 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
+import { isIsbn, lookupByIsbn, searchBooks, findCover, normalizeScan, toIsbn13 } from '../services/book-sources';
 
 export const googleBooks = new Hono<AppContext>();
 googleBooks.use('*', requireAuth);
 
-const API = 'https://www.googleapis.com/books/v1/volumes';
-
-interface GBVolume {
-  id: string;
-  volumeInfo: {
-    title?: string;
-    subtitle?: string;
-    authors?: string[];
-    publisher?: string;
-    publishedDate?: string;
-    description?: string;
-    industryIdentifiers?: { type: string; identifier: string }[];
-    pageCount?: number;
-    categories?: string[];
-    imageLinks?: { thumbnail?: string; smallThumbnail?: string };
-    language?: string;
-  };
-  saleInfo?: {
-    listPrice?: { amount: number; currencyCode: string };
-    retailPrice?: { amount: number; currencyCode: string };
-  };
-}
-
-// Google Books has no dedicated series field — series info is embedded in the title
-// e.g. "Los misterios de la taberna Kamogawa (Taberna Kamogawa 1)"
-function extractSeries(raw: string): { title: string; saga: string | null; sagaNumber: number | null } {
-  const m = raw.match(/\s*\(([^)]+?)\s*[,#\-]?\s*(?:[Vv]ol\.?\s*|#\s*|[Nn]º\s*)?(\d+)\s*\)\s*$/);
-  if (m) return { title: raw.replace(m[0], '').trim(), saga: m[1].trim(), sagaNumber: Number(m[2]) };
-  return { title: raw, saga: null, sagaNumber: null };
-}
-
-function mapVolume(v: GBVolume) {
-  const info = v.volumeInfo;
-  const ids = info.industryIdentifiers ?? [];
-  const isbn13 = ids.find(i => i.type === 'ISBN_13')?.identifier ?? null;
-  const isbn10 = ids.find(i => i.type === 'ISBN_10')?.identifier ?? null;
-  const price = v.saleInfo?.retailPrice?.amount ?? v.saleInfo?.listPrice?.amount ?? null;
-  const cover = info.imageLinks?.thumbnail
-    ?.replace('http://', 'https://')
-    ?.replace(/zoom=\d/, 'zoom=0') ?? null;
-
-  const series = extractSeries(info.title ?? '');
-
-  return {
-    googleId: v.id,
-    title: series.title,
-    subtitle: info.subtitle ?? null,
-    saga: series.saga,
-    sagaNumber: series.sagaNumber,
-    authors: info.authors ?? [],
-    publisher: info.publisher ?? null,
-    publishedDate: info.publishedDate ?? null,
-    description: info.description ?? null,
-    isbn: isbn10,
-    isbn13,
-    pages: info.pageCount ?? null,
-    categories: info.categories ?? [],
-    language: info.language ?? null,
-    cover,
-    price,
-    currency: v.saleInfo?.retailPrice?.currencyCode ?? v.saleInfo?.listPrice?.currencyCode ?? null,
-  };
-}
-
-// Search books
+// Search books — acepta texto libre o un ISBN suelto
 googleBooks.get('/search', async (c) => {
-  const q = c.req.query('q') ?? '';
+  const q = (c.req.query('q') ?? '').trim();
   if (!q) return c.json({ data: [], total: 0 });
+
+  const key = c.env.GOOGLE_BOOKS_KEY;
+
+  // Un ISBN pegado en el buscador (o llegado del escáner) no funciona como
+  // texto libre en Google: hay que resolverlo por la vía de ISBN.
+  if (isIsbn(q)) {
+    const { data, error } = await lookupByIsbn(q, key);
+    return c.json({ data: data ? [data] : [], total: data ? 1 : 0, error });
+  }
 
   const startIndex = Number(c.req.query('start') ?? '0');
   const maxResults = Math.min(Number(c.req.query('limit') ?? '20'), 40);
 
-  const url = `${API}?q=${encodeURIComponent(q)}&startIndex=${startIndex}&maxResults=${maxResults}&langRestrict=es&printType=books`;
-  const res = await fetch(url);
-  if (!res.ok) return c.json({ data: [], total: 0, error: 'Google Books API error' });
-
-  const json = await res.json() as { totalItems: number; items?: GBVolume[] };
-  return c.json({
-    data: (json.items ?? []).map(mapVolume),
-    total: json.totalItems ?? 0,
-  });
+  const { items, total, error } = await searchBooks(q, { start: startIndex, limit: maxResults, key });
+  return c.json({ data: items, total, error });
 });
-
-// Validate ISBN format (10 or 13 digits, optionally with hyphens)
-function isValidIsbn(isbn: string): boolean {
-  const clean = isbn.replace(/[-\s]/g, '');
-  return /^\d{10}$/.test(clean) || /^\d{13}$/.test(clean);
-}
 
 // Scrape price from Casa del Libro by ISBN
 async function casaDelLibroPrice(isbn: string): Promise<number | null> {
@@ -192,44 +125,34 @@ async function editorialPrice(title: string, publisher: string): Promise<number 
   return null;
 }
 
-// Lookup by ISBN — tries Google Books → Amazon.es → Casa del Libro
+// Lookup by ISBN — Google Books + Open Library + CEGAL + Apple Books en paralelo,
+// portada de los CDN por ISBN y, si nadie da precio, Amazon.es / Casa del Libro
 googleBooks.get('/isbn/:isbn', async (c) => {
-  const isbn = c.req.param('isbn');
-  const cleanIsbn = isbn.replace(/[-\s]/g, '');
+  const isbn = normalizeScan(c.req.param('isbn'));
 
-  // Only proceed if ISBN is valid (10 or 13 digits)
-  if (!isValidIsbn(cleanIsbn)) return c.json({ data: null });
+  const { data, error } = await lookupByIsbn(isbn, c.env.GOOGLE_BOOKS_KEY);
+  if (!data) return c.json({ data: null, error });
 
-  const url = `${API}?q=isbn:${encodeURIComponent(cleanIsbn)}&maxResults=1`;
-  const res = await fetch(url);
-
-  let data: ReturnType<typeof mapVolume> | null = null;
-  if (res.ok) {
-    const json = await res.json() as { items?: GBVolume[] };
-    if (json.items?.length) data = mapVolume(json.items[0]);
-  }
-
-  // If no price from Google Books, try Amazon.es then Casa del Libro
-  if (!data || !data.price) {
-    const extPrice = await amazonPrice(cleanIsbn) ?? await casaDelLibroPrice(cleanIsbn);
+  if (!data.price) {
+    const extPrice = await amazonPrice(isbn) ?? await casaDelLibroPrice(isbn);
     if (extPrice) {
-      if (data) {
-        data.price = extPrice;
-        data.currency = 'EUR';
-      } else {
-        data = {
-          googleId: '', title: '', subtitle: null, saga: null, sagaNumber: null, authors: [],
-          publisher: null, publishedDate: null, description: null,
-          isbn: cleanIsbn.length === 10 ? cleanIsbn : null,
-          isbn13: cleanIsbn.length === 13 ? cleanIsbn : null,
-          pages: null, categories: [], language: null, cover: null,
-          price: extPrice, currency: 'EUR',
-        };
-      }
+      data.price = extPrice;
+      data.currency = 'EUR';
+      data.sources.push('scraper');
     }
   }
 
-  return c.json({ data });
+  return c.json({ data, error });
+});
+
+// Buscar sólo portada por ISBN — para rellenar fichas ya guardadas
+googleBooks.get('/cover/:isbn', async (c) => {
+  const isbn = normalizeScan(c.req.param('isbn'));
+  if (!isIsbn(isbn)) return c.json({ cover: null, error: 'ISBN no válido' });
+
+  // Los CDN indexan unas veces por ISBN-10 y otras por ISBN-13: se prueban ambos.
+  const cover = await findCover(toIsbn13(isbn), isbn.length === 10 ? isbn : null);
+  return c.json({ cover });
 });
 
 // Editorial price lookup — for comics without valid ISBN (grapas)
