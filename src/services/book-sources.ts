@@ -155,12 +155,33 @@ function stripHtml(s: string | null | undefined): string | null {
 }
 
 /**
- * Google Books no tiene campo de serie: la mete entre paréntesis en el título.
- * p.ej. "Los misterios de la taberna Kamogawa (Taberna Kamogawa 1)"
+ * Ningún catálogo tiene campo de serie: la serie viene incrustada en el título,
+ * y cada uno lo hace a su manera. Se reconocen las dos formas habituales:
+ *
+ *   "Los misterios de la taberna Kamogawa (Taberna Kamogawa 1)"  → paréntesis
+ *   "Lobo Solitario 3: Las cavernas de Kalte"                    → prefijo
+ *
+ * Sin esto la pantalla de sagas queda casi vacía: de 44 libros solo dos
+ * traían la serie en el formato con paréntesis.
  */
 export function extractSeries(raw: string): { title: string; saga: string | null; sagaNumber: number | null } {
-  const m = raw.match(/\s*\(([^)]+?)\s*[,#\-]?\s*(?:[Vv]ol\.?\s*|#\s*|[Nn]º\s*)?(\d+)\s*\)\s*$/);
-  if (m) return { title: raw.replace(m[0], '').trim(), saga: m[1].trim(), sagaNumber: Number(m[2]) };
+  // "Título (Saga 3)", tolerando una coletilla detrás como "/ Original Title"
+  const paren = raw.match(/\s*\(([^)]+?)\s*[,#\-]?\s*(?:[Vv]ol\.?\s*|#\s*|[Nn]º\s*)?(\d+)\s*\)/);
+  if (paren) {
+    return {
+      title: raw.replace(paren[0], ' ').replace(/\s+/g, ' ').trim(),
+      saga: paren[1].trim(),
+      sagaNumber: Number(paren[2]),
+    };
+  }
+
+  // "Saga 3: Subtítulo" / "Saga 3 - Subtítulo". Se exige subtítulo para no
+  // convertir en saga un título que acabe en número ("Cachitos de amor 2").
+  const prefix = raw.match(/^(.{3,}?)\s+(\d{1,3})\s*[:–—-]\s*(.+)$/);
+  if (prefix) {
+    return { title: prefix[3].trim(), saga: prefix[1].trim(), sagaNumber: Number(prefix[2]) };
+  }
+
   return { title: raw, saga: null, sagaNumber: null };
 }
 
