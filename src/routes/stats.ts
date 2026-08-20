@@ -360,12 +360,15 @@ stats.get('/dashboard/books', async (c) => {
       GROUP BY publisher ORDER BY spent DESC LIMIT 10
     `).all<{ publisher: string; spent: number; count: number }>(),
 
+    // La columna de formato en books se llama binding, no format (en comics sí
+    // es format). Con el nombre equivocado la consulta lanzaba "no such column"
+    // y, al ir todas en un Promise.all, tumbaba el dashboard de libros entero.
     db.prepare(`
-      SELECT COALESCE(format, 'Sin formato') AS format,
+      SELECT COALESCE(binding, 'Sin formato') AS format,
              COALESCE(SUM(price), 0) AS spent,
              COUNT(*) AS count
       FROM books WHERE price IS NOT NULL AND price > 0
-      GROUP BY format ORDER BY spent DESC
+      GROUP BY binding ORDER BY spent DESC
     `).all<{ format: string; spent: number; count: number }>(),
   ]);
 
