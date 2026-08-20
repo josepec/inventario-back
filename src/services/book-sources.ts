@@ -23,10 +23,14 @@ const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 const TIMEOUT_MS = 8000;
 
 /**
- * CEGAL sirve siempre un GIF: cuando no tiene portada devuelve 200 con una
- * imagen de "sin cubierta" de tamaño fijo en lugar de un 404.
+ * Ninguna de estas fuentes devuelve 404 cuando no tiene la portada: todas
+ * responden 200 con una imagen de relleno, siempre del mismo tamaño exacto.
+ * Sin filtrarlas acabas guardando un "image not available" como cubierta.
  */
-const CEGAL_PLACEHOLDER_BYTES = 3963;
+const PLACEHOLDERS: { host: string; bytes: number }[] = [
+  { host: 'cegal.es', bytes: 3963 },          // cartel de "sin cubierta"
+  { host: 'books.google.com', bytes: 9103 },  // el PNG gris de "image not available"
+];
 
 /** Por debajo de esto no es una portada, es un pixel o un icono de error. */
 const MIN_COVER_BYTES = 1500;
@@ -93,6 +97,22 @@ export function isIsbn(raw: string): boolean {
   return isbn10Valid(c) || (isbn13Valid(c) && /^97[89]/.test(c));
 }
 
+/**
+ * Amazon indexa sus portadas por ISBN-10, así que hace falta la conversión
+ * inversa. Solo existe para el prefijo 978; los 979 no tienen equivalente.
+ */
+export function toIsbn10(raw: string): string | null {
+  const c = normalizeScan(raw);
+  if (isbn10Valid(c)) return c;
+  if (!isbn13Valid(c) || !c.startsWith('978')) return null;
+
+  const core = c.slice(3, 12);
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += Number(core[i]) * (10 - i);
+  const check = (11 - (sum % 11)) % 11;
+  return core + (check === 10 ? 'X' : String(check));
+}
+
 export function toIsbn13(raw: string): string | null {
   const c = normalizeScan(raw);
   if (isbn13Valid(c)) return c;
@@ -146,33 +166,53 @@ export function extractSeries(raw: string): { title: string; saga: string | null
 async function coverExists(url: string): Promise<boolean> {
   const res = await safeFetch(url, { method: 'HEAD' });
   if (!res || !res.ok) return false;
+
   const len = Number(res.headers.get('content-length') ?? '0');
-  if (len === CEGAL_PLACEHOLDER_BYTES && url.includes('cegal.es')) return false;
+  if (PLACEHOLDERS.some(p => url.includes(p.host) && len === p.bytes)) return false;
+
   // Sin content-length no podemos descartarla; se acepta y que decida el navegador.
   return len === 0 || len >= MIN_COVER_BYTES;
 }
 
-/** Candidatas de portada por ISBN, de mejor a peor apuesta para catálogo español. */
+/**
+ * Candidatas de portada por ISBN, de mejor a peor.
+ *
+ * CEGAL va la última a propósito: solo sirve las imágenes bajo /marcadas/, que
+ * llevan una marca de agua diagonal enorme más el logo de todostuslibros. Las
+ * otras rutas del CDN devuelven el placeholder, así que no hay version limpia.
+ * Vale como último recurso, pero cualquier otra fuente es preferible.
+ */
 function coverCandidates(isbn13: string | null, isbn10: string | null): string[] {
   const urls: string[] = [];
-  if (isbn13) {
-    // CEGAL: prefijo = 7 primeros dígitos, fichero = ISBN-13 sin dígito de control
-    urls.push(`https://static.cegal.es/imagenes/marcadas/${isbn13.slice(0, 7)}/${isbn13.slice(0, 12)}.gif`);
-    urls.push(`https://pictures.abebooks.com/isbn/${isbn13}-es._SL500_.jpg`);
-    urls.push(`https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg?default=false`);
-  }
-  if (isbn10 && isbn10 !== isbn13) {
-    urls.push(`https://pictures.abebooks.com/isbn/${isbn10}-es._SL500_.jpg`);
-    urls.push(`https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg?default=false`);
-  }
+
+  // Amazon indexa por ISBN-10 y devuelve la cubierta de la edicion exacta, sin
+  // marcas. Cuando no la tiene responde 200 con un GIF de 43 bytes, que cae
+  // por debajo de MIN_COVER_BYTES.
+  if (isbn10) urls.push(`https://m.media-amazon.com/images/P/${isbn10}.jpg`);
+  if (isbn13) urls.push(`https://pictures.abebooks.com/isbn/${isbn13}-es._SL500_.jpg`);
+  if (isbn10) urls.push(`https://pictures.abebooks.com/isbn/${isbn10}-es._SL500_.jpg`);
+  if (isbn13) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg?default=false`);
+  if (isbn10) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg?default=false`);
+
+  // CEGAL: prefijo = 7 primeros dígitos, fichero = ISBN-13 sin dígito de control
+  if (isbn13) urls.push(`https://static.cegal.es/imagenes/marcadas/${isbn13.slice(0, 7)}/${isbn13.slice(0, 12)}.gif`);
+
   return urls;
 }
 
-/** Primera portada que exista de verdad, o null. */
-export async function findCover(isbn13: string | null, isbn10: string | null): Promise<string | null> {
-  const candidates = coverCandidates(isbn13, isbn10);
-  const checks = await Promise.all(candidates.map(async url => (await coverExists(url)) ? url : null));
+/**
+ * Primera portada de la lista que exista de verdad. Se comprueban todas en
+ * paralelo pero se respeta el orden de preferencia al elegir.
+ */
+export async function firstWorkingCover(candidates: (string | null)[]): Promise<string | null> {
+  const urls = [...new Set(candidates.filter((u): u is string => !!u))];
+  const checks = await Promise.all(urls.map(async url => (await coverExists(url)) ? url : null));
   return checks.find(u => u !== null) ?? null;
+}
+
+/** Primera portada que exista de verdad para un ISBN, o null. */
+export async function findCover(isbn13: string | null, isbn10: string | null): Promise<string | null> {
+  return firstWorkingCover(coverCandidates(isbn13, isbn10));
 }
 
 // ── Google Books ──────────────────────────────────────────────────────────
@@ -549,7 +589,7 @@ export async function lookupByIsbn(
   if (!isIsbn(isbn)) return { data: null, error: 'ISBN no válido' };
 
   const isbn13 = toIsbn13(isbn);
-  const isbn10 = isbn.length === 10 ? isbn : null;
+  const isbn10 = toIsbn10(isbn);
 
   const [google, ol, cegal, apple] = await Promise.all([
     googleByIsbn(isbn, key),
@@ -579,13 +619,37 @@ export async function lookupByIsbn(
   data.isbn13 = data.isbn13 ?? isbn13;
   data.isbn = data.isbn ?? isbn10;
 
-  if (!data.cover) {
-    data.cover = await findCover(data.isbn13, data.isbn);
-    if (data.cover) data.sources.push('cover-cdn');
+  // La portada se resuelve aparte y SIEMPRE se verifica, incluida la de Google:
+  // para las fichas sin cubierta devuelve un PNG de "image not available" con
+  // HTTP 200, que si te fías del merge acaba guardado como si fuera la portada.
+  const googleCover = google.data?.cover ?? null;
+  const appleCover = apple?.cover ?? null;
+  data.cover = await firstWorkingCover([
+    googleCover,                                 // la de la edición que dio los datos
+    appleCover,                                  // 1200x1200, la de más resolución
+    ...coverCandidates(data.isbn13, data.isbn),  // Amazon, AbeBooks, OpenLibrary, CEGAL
+  ]);
+  if (data.cover && data.cover !== googleCover && data.cover !== appleCover) {
+    data.sources.push('cover-cdn');
   }
 
   data.sources = [...new Set(data.sources)];
   return { data, error: google.error };
+}
+
+/**
+ * En un listado no se puede resolver la portada a fondo de cada resultado: un
+ * Worker del plan Free tiene un tope de 50 subpeticiones por request, así que
+ * sólo se comprueba la que ya trae cada ficha y se descarta si es un
+ * placeholder. La buena se busca al seleccionar el libro, vía lookupByIsbn.
+ */
+const MAX_LISTING_COVER_CHECKS = 30;
+
+async function verifyListingCovers(items: BookMeta[]): Promise<BookMeta[]> {
+  await Promise.all(items.slice(0, MAX_LISTING_COVER_CHECKS).map(async item => {
+    if (item.cover && !(await coverExists(item.cover))) item.cover = null;
+  }));
+  return items;
 }
 
 /**
@@ -597,7 +661,9 @@ export async function searchBooks(
   q: string, opts: { start?: number; limit?: number; key?: string } = {}
 ): Promise<{ items: BookMeta[]; total: number; error: string | null }> {
   const google = await googleSearch(q, opts);
-  if (google.items.length > 0) return google;
+  if (google.items.length > 0) {
+    return { ...google, items: await verifyListingCovers(google.items) };
+  }
 
   const limit = opts.limit ?? 20;
 
@@ -632,14 +698,12 @@ export async function searchBooks(
     sources: ['openlibrary'],
   }));
 
-  if (items.length > 0) return { items, total: json.numFound ?? items.length, error: google.error };
+  if (items.length > 0) {
+    return { items: await verifyListingCovers(items), total: json.numFound ?? items.length, error: google.error };
+  }
 
   // Último recurso: CEGAL. Open Library indexa poco en castellano, así que un
   // título español sin edición inglesa sólo aparece aquí.
   const cegal = await cegalSearch(q, limit).catch(() => []);
-  await Promise.all(cegal.map(async item => {
-    if (item.cover && !(await coverExists(item.cover))) item.cover = null;
-  }));
-
-  return { items: cegal, total: cegal.length, error: google.error };
+  return { items: await verifyListingCovers(cegal), total: cegal.length, error: google.error };
 }
