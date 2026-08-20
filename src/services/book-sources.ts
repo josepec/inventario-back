@@ -35,6 +35,14 @@ const PLACEHOLDERS: { host: string; bytes: number }[] = [
 /** Por debajo de esto no es una portada, es un pixel o un icono de error. */
 const MIN_COVER_BYTES = 1500;
 
+/**
+ * Umbral para considerar una portada "de tamaño usable". AbeBooks guarda una
+ * sola imagen por ISBN y a veces es una miniatura de 90x150 (~5 KB), que en la
+ * rejilla se ve fatal; en esos casos compensa bajar a una fuente peor colocada
+ * pero con una imagen de verdad. Medido: una portada legible pasa de 15 KB.
+ */
+const GOOD_COVER_BYTES = 15000;
+
 export interface BookMeta {
   googleId: string;
   title: string;
@@ -163,15 +171,21 @@ export function extractSeries(raw: string): { title: string; saga: string | null
  * front acaba pintando cuadros rotos: cada CDN falla a su manera (404 limpio
  * en AbeBooks, placeholder con 200 en CEGAL).
  */
-async function coverExists(url: string): Promise<boolean> {
+/** Tamaño en bytes si la imagen existe; null si no sirve. */
+async function coverSize(url: string): Promise<number | null> {
   const res = await safeFetch(url, { method: 'HEAD' });
-  if (!res || !res.ok) return false;
+  if (!res || !res.ok) return null;
 
   const len = Number(res.headers.get('content-length') ?? '0');
-  if (PLACEHOLDERS.some(p => url.includes(p.host) && len === p.bytes)) return false;
+  if (PLACEHOLDERS.some(p => url.includes(p.host) && len === p.bytes)) return null;
 
-  // Sin content-length no podemos descartarla; se acepta y que decida el navegador.
-  return len === 0 || len >= MIN_COVER_BYTES;
+  // Sin content-length no podemos juzgarla; se acepta y que decida el navegador.
+  if (len === 0) return GOOD_COVER_BYTES;
+  return len >= MIN_COVER_BYTES ? len : null;
+}
+
+async function coverExists(url: string): Promise<boolean> {
+  return (await coverSize(url)) !== null;
 }
 
 /**
@@ -189,8 +203,21 @@ function coverCandidates(isbn13: string | null, isbn10: string | null): string[]
   // marcas. Cuando no la tiene responde 200 con un GIF de 43 bytes, que cae
   // por debajo de MIN_COVER_BYTES.
   if (isbn10) urls.push(`https://m.media-amazon.com/images/P/${isbn10}.jpg`);
-  if (isbn13) urls.push(`https://pictures.abebooks.com/isbn/${isbn13}-es._SL500_.jpg`);
-  if (isbn10) urls.push(`https://pictures.abebooks.com/isbn/${isbn10}-es._SL500_.jpg`);
+
+  // Casa del Libro: subdominio = último dígito del ISBN-13, carpeta = los dos
+  // últimos. De sus tallas, t7 es la mayor (~550px de ancho); las demás son
+  // miniaturas. Va antes que AbeBooks porque publica el arte de cubierta que le
+  // pasa la editorial, mientras que AbeBooks suele traer la foto que subió un
+  // librero de su ejemplar de segunda mano: torcida, con márgenes y desgaste.
+  if (isbn13) urls.push(`https://imagessl${isbn13.slice(-1)}.casadellibro.com/a/l/t7/${isbn13.slice(-2)}/${isbn13}.jpg`);
+
+  // AbeBooks guarda una imagen por ISBN y por región, y no siempre son la misma:
+  // hay ISBN cuya versión -en es bastante mayor que la -es. El sufijo de tamaño
+  // (_SL500_, -300...) no cambia nada, sirve la que tenga guardada.
+  if (isbn13) urls.push(`https://pictures.abebooks.com/isbn/${isbn13}-es.jpg`);
+  if (isbn13) urls.push(`https://pictures.abebooks.com/isbn/${isbn13}-en.jpg`);
+  if (isbn10) urls.push(`https://pictures.abebooks.com/isbn/${isbn10}-es.jpg`);
+
   if (isbn13) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg?default=false`);
   if (isbn10) urls.push(`https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg?default=false`);
 
@@ -206,8 +233,12 @@ function coverCandidates(isbn13: string | null, isbn10: string | null): string[]
  */
 export async function firstWorkingCover(candidates: (string | null)[]): Promise<string | null> {
   const urls = [...new Set(candidates.filter((u): u is string => !!u))];
-  const checks = await Promise.all(urls.map(async url => (await coverExists(url)) ? url : null));
-  return checks.find(u => u !== null) ?? null;
+  const sizes = await Promise.all(urls.map(coverSize));
+
+  // Primera pasada: la mejor colocada que además tenga un tamaño decente.
+  // Segunda: si todas son miniaturas, la mejor colocada que exista.
+  const usable = urls.find((u, i) => sizes[i] !== null && sizes[i]! >= GOOD_COVER_BYTES);
+  return usable ?? urls.find((_, i) => sizes[i] !== null) ?? null;
 }
 
 /** Primera portada que exista de verdad para un ISBN, o null. */
