@@ -58,3 +58,30 @@ export function buildWhere(filters: Record<string, unknown>): { sql: string; par
 export function now(): string {
   return new Date().toISOString().replace('T', ' ').substring(0, 19);
 }
+
+// ── Búsqueda sin tildes ──────────────────────────────────────────────────────
+// SQLite no tiene unaccent y su LOWER/LIKE solo pliegan mayúsculas ASCII ("PAÍS"
+// no casa con "país"), así que las vocales acentuadas, ñ y ç se pliegan a mano.
+const ACCENT_FOLDS: [string, string][] = [
+  ['a', 'àáâäãÀÁÂÄÃ'], ['e', 'èéêëÈÉÊË'], ['i', 'ìíîïÌÍÎÏ'],
+  ['o', 'òóôöõÒÓÔÖÕ'], ['u', 'ùúûüÙÚÛÜ'], ['n', 'ñÑ'], ['c', 'çÇ'],
+].flatMap(([base, chars]) => [...chars].map(ch => [ch, base] as [string, string]));
+
+/** Expresión SQL que devuelve `col` en minúsculas y sin tildes. */
+export function foldSql(col: string): string {
+  return ACCENT_FOLDS.reduce((expr, [from, to]) => `REPLACE(${expr},'${from}','${to}')`, `LOWER(${col})`);
+}
+
+/** Mismo plegado que foldSql, aplicado al texto buscado. */
+export function foldText(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/** Condición "alguna de estas columnas contiene `search`", ignorando tildes y mayúsculas. */
+export function foldedLike(cols: string[], search: string): { sql: string; params: string[] } {
+  const like = `%${foldText(search)}%`;
+  return {
+    sql: cols.map(c => `${foldSql(c)} LIKE ?`).join(' OR '),
+    params: cols.map(() => like),
+  };
+}

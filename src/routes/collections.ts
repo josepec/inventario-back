@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
-import { paginate, now } from '../db/helpers';
+import { paginate, now, foldedLike } from '../db/helpers';
 import { resyncTrackedCollections } from '../cron';
 
 const collections = new Hono<AppContext>();
@@ -44,9 +44,9 @@ collections.get('/', async (c) => {
   const params: unknown[] = [];
 
   if (search) {
-    conditions.push('(title LIKE ? OR publisher LIKE ?)');
-    const like = `%${search}%`;
-    params.push(like, like);
+    const text = foldedLike(['title', 'publisher'], search);
+    conditions.push(`(${text.sql})`);
+    params.push(...text.params);
   }
   if (author) {
     conditions.push("EXISTS (SELECT 1 FROM json_each(authors) WHERE json_extract(value, '$.name') = ?)");

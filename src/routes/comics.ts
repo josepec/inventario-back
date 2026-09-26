@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
-import { paginate, now } from '../db/helpers';
+import { paginate, now, foldedLike } from '../db/helpers';
 import { fetchNewTitles, enrichWithOwnership, flattenNewTitles, fetchOwnedWhakoomIds } from './whakoom';
 
 const comics = new Hono<AppContext>();
@@ -236,9 +236,11 @@ comics.get('/', async (c) => {
   const params: unknown[] = [];
 
   if (search) {
-    conditions.push('(title LIKE ? OR subtitle LIKE ? OR series LIKE ? OR writer LIKE ? OR artist LIKE ? OR isbn LIKE ? OR ean LIKE ?)');
+    // El ISBN se compara también sin guiones para que "9788416581818" encuentre "978-8-416-58181-8"
+    const text = foldedLike(['title', 'subtitle', 'series', 'writer', 'artist'], search);
+    conditions.push(`(${text.sql} OR isbn LIKE ? OR ean LIKE ? OR REPLACE(isbn,'-','') LIKE ?)`);
     const like = `%${search}%`;
-    params.push(like, like, like, like, like, like, like);
+    params.push(...text.params, like, like, `%${search.replace(/-/g, '')}%`);
   }
   if (read_status) { conditions.push('read_status = ?'); params.push(read_status); }
   if (owned !== '') { conditions.push('owned = ?'); params.push(owned === 'true' ? 1 : 0); }
@@ -305,25 +307,38 @@ comics.post('/', async (c) => {
   // pareja. No cae a ISBN porque Whakoom a veces devuelve el mismo ISBN para varios
   // números (ej. Rurouni Kenshin #4/#5) y sobreescribiría un cómic distinto.
   // Sin collection_id+number (alta manual / escaneo ISBN), matchea por ISBN o título.
+  // El whakoom_id identifica una edición concreta, así que se comprueba siempre primero.
+  // El ISBN se compara normalizado (sin guiones/espacios): hay cómics antiguos guardados
+  // como "978-8-416-58181-8" y Whakoom lo devuelve como "9788416581818".
   const isbn = str('isbn');
   const title = str('title');
   const collectionId = num('collection_id');
   const number = num('number');
+  const whakoomIdIn = str('whakoom_id');
+  const isbnNorm = isbn ? isbn.replace(/[^0-9Xx]/g, '').toUpperCase() : null;
   let existing: { id: number } | null = null;
 
-  if (collectionId && number != null) {
+  if (whakoomIdIn) {
+    existing = await c.env.DB
+      .prepare('SELECT id FROM comics WHERE whakoom_id = ?').bind(whakoomIdIn).first<{ id: number }>();
+  }
+  if (!existing && collectionId && number != null) {
     existing = await c.env.DB
       .prepare('SELECT id FROM comics WHERE collection_id = ? AND number = ?')
       .bind(collectionId, number).first<{ id: number }>();
-  } else {
-    if (isbn) {
+  } else if (!existing) {
+    if (isbnNorm) {
       existing = await c.env.DB
-        .prepare('SELECT id FROM comics WHERE isbn = ?').bind(isbn).first<{ id: number }>();
+        .prepare("SELECT id FROM comics WHERE UPPER(REPLACE(REPLACE(isbn,'-',''),' ','')) = ?")
+        .bind(isbnNorm).first<{ id: number }>();
     }
-    if (!existing && title && collectionId) {
+    // Mismo título, colección y número, siempre que los ISBN no demuestren que son
+    // ediciones distintas
+    if (!existing && title) {
       existing = await c.env.DB
-        .prepare('SELECT id FROM comics WHERE title = ? AND collection_id = ?')
-        .bind(title, collectionId).first<{ id: number }>();
+        .prepare(`SELECT id FROM comics WHERE title = ? AND collection_id IS ? AND number IS ?
+                  AND (isbn IS NULL OR isbn = '' OR ? IS NULL)`)
+        .bind(title, collectionId, number, isbnNorm).first<{ id: number }>();
     }
   }
 

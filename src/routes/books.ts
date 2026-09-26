@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
-import { paginate, now } from '../db/helpers';
+import { paginate, now, foldedLike } from '../db/helpers';
 
 const books = new Hono<AppContext>();
 
@@ -84,9 +84,10 @@ books.get('/', async (c) => {
   const params: unknown[] = [];
 
   if (search) {
-    conditions.push('(title LIKE ? OR author LIKE ? OR publisher LIKE ? OR isbn LIKE ? OR isbn13 LIKE ? OR ean LIKE ? OR saga LIKE ?)');
+    const text = foldedLike(['title', 'author', 'publisher', 'saga'], search);
+    conditions.push(`(${text.sql} OR isbn LIKE ? OR isbn13 LIKE ? OR ean LIKE ?)`);
     const like = `%${search}%`;
-    params.push(like, like, like, like, like, like, like);
+    params.push(...text.params, like, like, like);
   }
   if (read_status) { conditions.push('read_status = ?'); params.push(read_status); }
   if (owned !== '') { conditions.push('owned = ?'); params.push(owned === 'true' ? 1 : 0); }
