@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
-import { isIsbn, lookupByIsbn, searchBooks, findCover, normalizeScan, toIsbn13 } from '../services/book-sources';
+import { isIsbn, lookupByIsbn, searchBooks, findCover, normalizeScan, toIsbn13, coverOptions } from '../services/book-sources';
 
 export const googleBooks = new Hono<AppContext>();
 googleBooks.use('*', requireAuth);
@@ -143,6 +143,18 @@ googleBooks.get('/isbn/:isbn', async (c) => {
   }
 
   return c.json({ data, error });
+});
+
+// Todas las portadas disponibles para elegir a mano: las de cada fuente para el
+// ISBN y, con ?title=&author=, las de otras ediciones
+googleBooks.get('/covers', async (c) => {
+  const isbn = c.req.query('isbn') || null;
+  const title = c.req.query('title')?.trim() || undefined;
+  const author = c.req.query('author')?.trim() || undefined;
+  if (!isbn && !title) return c.json({ data: [] });
+
+  const data = await coverOptions(isbn, { title, author, key: c.env.GOOGLE_BOOKS_KEY });
+  return c.json({ data });
 });
 
 // Buscar sólo portada por ISBN — para rellenar fichas ya guardadas

@@ -54,6 +54,22 @@ covers.post('/upload', requireAuth, async (c) => {
   }
 });
 
+// POST /covers/upload-file — subir una imagen propia (foto o escaneo) a R2
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+covers.post('/upload-file', requireAuth, async (c) => {
+  const body = await c.req.parseBody();
+  const file = body['file'];
+  if (!(file instanceof File)) return c.json({ error: 'Falta el fichero' }, 400);
+  if (!file.type.startsWith('image/')) return c.json({ error: 'No es una imagen' }, 400);
+  if (file.size > MAX_UPLOAD_BYTES) return c.json({ error: 'La imagen pasa de 8 MB' }, 413);
+
+  const ext = file.type.includes('png') ? 'png' : file.type.includes('webp') ? 'webp' : 'jpg';
+  const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  await c.env.COVERS.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } });
+  return c.json({ key, url: `/covers/${key}` });
+});
+
 // DELETE /covers/:key — borrar imagen de R2
 covers.delete('/:key{.+}', requireAuth, async (c) => {
   const key = c.req.param('key');

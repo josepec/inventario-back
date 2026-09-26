@@ -1,11 +1,29 @@
 import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
-import { paginate, now, foldedLike } from '../db/helpers';
+import { D1Database } from '@cloudflare/workers-types';
+import { paginate, now, foldedLike, foldSql, foldText } from '../db/helpers';
 
 const books = new Hono<AppContext>();
 
 books.use('*', requireAuth);
+
+/**
+ * "Canción de Hielo y Fuego" y "Canción de hielo y fuego" partían la saga en dos.
+ * Si ya hay otra saga que sólo cambia en mayúsculas, tildes o espacios, se usa su
+ * nombre. `exclude` descarta filas (el propio libro, o la saga que se renombra)
+ * para que un cambio de mayúsculas intencionado no se revierta contra sí mismo.
+ */
+async function canonicalSaga(
+  db: D1Database, raw: unknown, exclude: { id?: number; saga?: string } = {}
+): Promise<string | null> {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const name = raw.trim().replace(/\s+/g, ' ');
+  const hit = await db.prepare(
+    `SELECT saga FROM books WHERE ${foldSql('saga')} = ? AND id IS NOT ? AND saga IS NOT ? LIMIT 1`
+  ).bind(foldText(name), exclude.id ?? null, exclude.saga ?? null).first<{ saga: string }>();
+  return hit?.saga ?? name;
+}
 
 // GET /books/facets
 books.get('/facets', async (c) => {
@@ -58,6 +76,21 @@ books.get('/sagas', async (c) => {
   }));
 
   return c.json(sagas);
+});
+
+// PATCH /books/sagas — renombrar una saga en todos sus libros. Si el nombre nuevo
+// ya existe se fusionan; sin nombre nuevo se quita la saga (y su número) de los libros.
+books.patch('/sagas', async (c) => {
+  const body = await c.req.json<{ from?: string; to?: string | null }>();
+  if (!body.from) return c.json({ error: 'Falta la saga' }, 400);
+
+  const to = await canonicalSaga(c.env.DB, body.to, { saga: body.from });
+  const res = to
+    ? await c.env.DB.prepare('UPDATE books SET saga = ?, updated_at = ? WHERE saga = ?')
+        .bind(to, now(), body.from).run()
+    : await c.env.DB.prepare('UPDATE books SET saga = NULL, saga_number = NULL, updated_at = ? WHERE saga = ?')
+        .bind(now(), body.from).run();
+  return c.json({ ok: true, saga: to, updated: res.meta.changes });
 });
 
 // GET /books
@@ -127,6 +160,7 @@ books.get('/:id', async (c) => {
 // POST /books
 books.post('/', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
+  body['saga'] = await canonicalSaga(c.env.DB, body['saga']);
 
   const result = await c.env.DB.prepare(`
     INSERT INTO books (
@@ -170,6 +204,7 @@ books.put('/:id', async (c) => {
   const existing = await c.env.DB
     .prepare('SELECT id FROM books WHERE id = ?').bind(id).first();
   if (!existing) return c.json({ error: 'No encontrado' }, 404);
+  body['saga'] = await canonicalSaga(c.env.DB, body['saga'], { id });
 
   await c.env.DB.prepare(`
     UPDATE books SET

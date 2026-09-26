@@ -1,0 +1,230 @@
+[
+ {
+  "id": 123,
+  "title": "Lazarillo Z",
+  "saga": "Bestseller / Debolsillo",
+  "saga_number": null
+ },
+ {
+  "id": 99,
+  "title": "El umbral de la noche",
+  "saga": "Bestseller. Biblioteca Stephen King; 102/3",
+  "saga_number": null
+ },
+ {
+  "id": 73,
+  "title": "El Señor de los Anillos I. La Comunidad del Anillo",
+  "saga": "Booket. Biblioteca J.R.R. Tolkien -- 5017/1",
+  "saga_number": null
+ },
+ {
+  "id": 70,
+  "title": "Danza de dragones",
+  "saga": "Canción de Hielo y Fuego, 5",
+  "saga_number": null
+ },
+ {
+  "id": 67,
+  "title": "Festín de cuervos",
+  "saga": "Canción de hielo y fuego, 4",
+  "saga_number": null
+ },
+ {
+  "id": 30,
+  "title": "El Juicio Final de Carl (Carl el Mazmorrero 2)",
+  "saga": "Carl el Mazmorrero",
+  "saga_number": 2
+ },
+ {
+  "id": 29,
+  "title": "El Libro de Cocina Del Anarquista de la Mazmorra (Carl el Mazmorrero 3) / the Dungeon Anarchist's Cookbook",
+  "saga": "Carl el Mazmorrero",
+  "saga_number": 3
+ },
+ {
+  "id": 90,
+  "title": "Neuromante",
+  "saga": "Colección Booket",
+  "saga_number": null
+ },
+ {
+  "id": 122,
+  "title": "La carretera",
+  "saga": "Contemporánea",
+  "saga_number": null
+ },
+ {
+  "id": 59,
+  "title": "El nombre del viento / The Name of the Wind",
+  "saga": "Crónica del asesino de reyes 1",
+  "saga_number": null
+ },
+ {
+  "id": 111,
+  "title": "Entrevista con el vampiro (Crónicas Vampíricas 1)",
+  "saga": "Crónicas vampíricas",
+  "saga_number": 1
+ },
+ {
+  "id": 61,
+  "title": "Darkwing: La Caza",
+  "saga": "Darkwing",
+  "saga_number": 1
+ },
+ {
+  "id": 85,
+  "title": "Dune",
+  "saga": "Dune (1)",
+  "saga_number": null
+ },
+ {
+  "id": 63,
+  "title": "El guardián entre el centeno",
+  "saga": "El libro de bolsillo No. 5500 - Literatura",
+  "saga_number": null
+ },
+ {
+  "id": 64,
+  "title": "Nueve cuentos",
+  "saga": "El libro de bolsillo No. 5536 - Literatura",
+  "saga_number": null
+ },
+ {
+  "id": 18,
+  "title": "La búsqueda del Grial 1: El castillo de las sombras",
+  "saga": "La Búsqueda del Grial",
+  "saga_number": 1
+ },
+ {
+  "id": 19,
+  "title": "La Búsqueda del Grial 2: La guarida de los dragones",
+  "saga": "La Búsqueda del Grial",
+  "saga_number": 2
+ },
+ {
+  "id": 20,
+  "title": "La Búsqueda del Grial 3: La puerta de la perdición",
+  "saga": "La Búsqueda del Grial",
+  "saga_number": 3
+ },
+ {
+  "id": 21,
+  "title": "La Búsqueda del Grial 4: El viaje del terror",
+  "saga": "La Búsqueda del Grial",
+  "saga_number": 4
+ },
+ {
+  "id": 110,
+  "title": "La torre oscura",
+  "saga": "La Torre Oscura",
+  "saga_number": null
+ },
+ {
+  "id": 13,
+  "title": "Lobo Solitario 1: Huida de la Oscuridad",
+  "saga": "Lobo Solitario",
+  "saga_number": 1
+ },
+ {
+  "id": 14,
+  "title": "Lobo Solitario 2: Fuego sobre el Agua",
+  "saga": "Lobo Solitario",
+  "saga_number": 2
+ },
+ {
+  "id": 15,
+  "title": "Lobo Solitario 3: Las cavernas de Kalte",
+  "saga": "Lobo Solitario",
+  "saga_number": 3
+ },
+ {
+  "id": 16,
+  "title": "Lobo Solitario 4: El abismo maldito",
+  "saga": "Lobo Solitario",
+  "saga_number": 4
+ },
+ {
+  "id": 17,
+  "title": "Lobo Solitario 5: Sombras sobre la arena",
+  "saga": "Lobo Solitario",
+  "saga_number": 5
+ },
+ {
+  "id": 137,
+  "title": "La guerra de los mundos",
+  "saga": "Millenium - Las 100 joyas del milenio No. 42 (Biblioteca El mundo)",
+  "saga_number": null
+ },
+ {
+  "id": 136,
+  "title": "El Señor de las moscas",
+  "saga": "Millenium - Las 100 joyas del milenio No. 89 (Biblioteca El mundo)",
+  "saga_number": null
+ },
+ {
+  "id": 92,
+  "title": "Rebelión en la Granja",
+  "saga": "Novela No. 2189",
+  "saga_number": null
+ },
+ {
+  "id": 114,
+  "title": "Hora cero",
+  "saga": "Resident evil ; 0",
+  "saga_number": null
+ },
+ {
+  "id": 1,
+  "title": "Los misterios de la taberna Kamogawa",
+  "saga": "Taberna Kamogawa",
+  "saga_number": 1
+ },
+ {
+  "id": 2,
+  "title": "Las deliciosas historias de la taberna Kamogawa",
+  "saga": "Taberna Kamogawa",
+  "saga_number": 2
+ },
+ {
+  "id": 33,
+  "title": "Las recetas perdidas de la taberna Kamogawa (Taberna Kamogawa 3)",
+  "saga": "Taberna Kamogawa",
+  "saga_number": 3
+ },
+ {
+  "id": 34,
+  "title": "Los sabores secretos de la taberna Kamogawa",
+  "saga": "Taberna Kamogawa",
+  "saga_number": 4
+ },
+ {
+  "id": 28,
+  "title": "Así es como se mata (Un caso del comisario Mancini 1)",
+  "saga": "Un caso del comisario Mancini",
+  "saga_number": 1
+ },
+ {
+  "id": 4,
+  "title": "Las Colinas de Shamutanti",
+  "saga": "¡Brujería!",
+  "saga_number": 1
+ },
+ {
+  "id": 5,
+  "title": "Kharé",
+  "saga": "¡Brujería!",
+  "saga_number": 2
+ },
+ {
+  "id": 10,
+  "title": "Las Siete serpientes",
+  "saga": "¡Brujería!",
+  "saga_number": 3
+ },
+ {
+  "id": 11,
+  "title": "La Corona de los reyes",
+  "saga": "¡Brujería!",
+  "saga_number": 4
+ }
+]
