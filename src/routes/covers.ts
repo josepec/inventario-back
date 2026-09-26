@@ -34,6 +34,14 @@ covers.post('/upload', requireAuth, async (c) => {
     if (!res.ok) return c.json({ error: `No se pudo descargar: ${res.status}` }, 502);
 
     const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+    if (!contentType.startsWith('image/')) {
+      return c.json({ error: `La URL no es una imagen (${contentType.split(';')[0]})` }, 422);
+    }
+
+    // Se lee entera en vez de pasar el stream: R2 exige saber la longitud, y hay
+    // CDN que sirven sin Content-Length (Open Library → archive.org, en chunked)
+    const data = await res.arrayBuffer();
+    if (data.byteLength === 0) return c.json({ error: 'La imagen está vacía' }, 502);
     const ext = contentType.includes('png') ? 'png'
       : contentType.includes('webp') ? 'webp'
       : contentType.includes('gif') ? 'gif'
@@ -44,7 +52,7 @@ covers.post('/upload', requireAuth, async (c) => {
       ? `${body.key}.${ext}`
       : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-    await c.env.COVERS.put(key, res.body!, {
+    await c.env.COVERS.put(key, data, {
       httpMetadata: { contentType },
     });
 
