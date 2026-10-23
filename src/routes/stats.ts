@@ -124,10 +124,13 @@ stats.get('/dashboard', async (c) => {
         `).bind(statsStartDate).all<{ month: string; count: number }>()
       : Promise.resolve({ results: [] as { month: string; count: number }[] }),
 
+    // Leidos por read_at, no por updated_at: este cambia tambien al editar la
+    // ficha, y corregir el precio de un comic leido en mayo lo pasaba a octubre.
+    // read_at lo mantienen triggers (migrations/0016_read_at.sql).
     statsStartDate
       ? db.prepare(`
-          SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
-          FROM comics WHERE read_status = 'read' AND updated_at >= ? AND updated_at >= date('now', '-12 months')
+          SELECT strftime('%Y-%m', read_at) as month, COUNT(*) as count
+          FROM comics WHERE read_status = 'read' AND read_at >= ? AND read_at >= date('now', '-12 months')
           GROUP BY month ORDER BY month
         `).bind(statsStartDate).all<{ month: string; count: number }>()
       : Promise.resolve({ results: [] as { month: string; count: number }[] }),
@@ -312,8 +315,8 @@ stats.get('/dashboard/books', async (c) => {
 
     statsStartDate
       ? db.prepare(`
-          SELECT strftime('%Y-%m', updated_at) as month, COUNT(*) as count
-          FROM books WHERE read_status = 'read' AND updated_at >= ? AND updated_at >= date('now', '-12 months')
+          SELECT strftime('%Y-%m', read_at) as month, COUNT(*) as count
+          FROM books WHERE read_status = 'read' AND read_at >= ? AND read_at >= date('now', '-12 months')
           GROUP BY month ORDER BY month
         `).bind(statsStartDate).all<{ month: string; count: number }>()
       : Promise.resolve({ results: [] as { month: string; count: number }[] }),
