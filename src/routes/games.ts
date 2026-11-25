@@ -3,6 +3,7 @@ import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 import { now, foldedLike } from '../db/helpers';
 import { searchGames, gameDetail, PS_PLATFORMS } from '../services/igdb';
+import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
 // edición). Ver migrations/0017_games.sql.
@@ -76,6 +77,39 @@ games.get('/igdb/search', async (c) => {
     return c.json({ data: results.map(r => ({ ...r, local_id: local.get(r.igdb_id) ?? null })) });
   } catch (err) {
     return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
+  }
+});
+
+// GET /games/barcode/:ean — del código de barras de un juego físico a candidatos
+// de IGDB. Si ya hay una copia con ese EAN se devuelve su juego y nada más.
+games.get('/barcode/:ean', async (c) => {
+  const ean = cleanEan(c.req.param('ean'));
+  if (ean.length < 8) return c.json({ error: 'Código de barras no válido' }, 400);
+
+  const owned = await c.env.DB
+    .prepare('SELECT g.id, g.title FROM game_copies gc JOIN games g ON g.id = gc.game_id WHERE gc.ean = ? LIMIT 1')
+    .bind(ean).first<{ id: number; title: string }>();
+  if (owned) return c.json({ ean, owned, product: null, data: [] });
+
+  const product = await lookupGameBarcode(ean);
+  if (!product) return c.json({ ean, owned: null, product: null, data: [] });
+
+  try {
+    let results = await searchGames(c.env, product.title);
+    // Títulos traducidos ("Ratchet & Clank: Una Dimensión Aparte"): IGDB los
+    // tiene en inglés, pero la parte de antes de los dos puntos suele bastar.
+    const head = product.title.split(':')[0].trim();
+    if (!results.length && head !== product.title && head.length >= 3) results = await searchGames(c.env, head);
+    const ids = results.map(r => r.igdb_id);
+    const local = ids.length
+      ? await c.env.DB.prepare(`SELECT id, igdb_id FROM games WHERE igdb_id IN (${ids.map(() => '?').join(',')})`)
+          .bind(...ids).all<{ id: number; igdb_id: number }>()
+      : { results: [] };
+    const map = new Map(local.results.map(r => [r.igdb_id, r.id]));
+    return c.json({ ean, owned: null, product, data: results.map(r => ({ ...r, local_id: map.get(r.igdb_id) ?? null })) });
+  } catch (err) {
+    // Sin IGDB aún sirve el nombre del producto para buscarlo o darlo de alta a mano.
+    return c.json({ ean, owned: null, product, data: [], error: String(err instanceof Error ? err.message : err) });
   }
 });
 

@@ -133,7 +133,7 @@ export function toIsbn13(raw: string): string | null {
 
 // ── Utilidades ────────────────────────────────────────────────────────────
 
-async function safeFetch(url: string, init: RequestInit = {}): Promise<Response | null> {
+export async function safeFetch(url: string, init: RequestInit = {}): Promise<Response | null> {
   try {
     return await fetch(url, {
       ...init,
@@ -149,7 +149,7 @@ const COMBINING: Record<string, string> = {
   acute: '́', grave: '̀', uml: '̈', circ: '̂', tilde: '̃', cedil: '̧',
 };
 
-function stripHtml(s: string | null | undefined): string | null {
+export function stripHtml(s: string | null | undefined): string | null {
   if (!s) return null;
   const text = s.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
