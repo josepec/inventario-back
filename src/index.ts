@@ -64,7 +64,8 @@ app.notFound((c) => c.json({ error: 'Ruta no encontrada' }, 404));
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    if (event.cron === '30 6 * * *') {
+    // Un solo cron ("0,30 6 * * *", ver wrangler.toml): a y media, trofeos.
+    if (new Date(event.scheduledTime).getUTCMinutes() >= 30) {
       ctx.waitUntil(syncTrophies(env).then(
         r => console.log('trofeos:', JSON.stringify(r)),
         e => console.error('trofeos:', e),
