@@ -290,35 +290,64 @@ export async function fetchOwnershipMaps(db: D1Database): Promise<{
   ownedSet: Set<string>;
   collMap: Map<string, number>;
 }> {
-  const rows = await db.prepare(`
-    SELECT json_extract(issue.value, '$.id') AS wk_id,
-           co.id                             AS col_id
-      FROM collections co, json_each(co.issues) AS issue
-      JOIN comics c
-        ON c.collection_id = co.id
-       AND CAST(c.number AS INTEGER) = CAST(json_extract(issue.value, '$.number') AS INTEGER)
-     WHERE co.issues IS NOT NULL
-  `).all<{ wk_id: string; col_id: number }>();
+  // El cruce (número de Whakoom de cada colección ↔ cómic de esa colección con
+  // ese número) se hace aquí y no en SQL: con json_each + JOIN, D1 contaba como
+  // leída cada combinación (~93.000 filas por llamada) y Novedades agotaba el
+  // límite gratuito de 5M filas/día. Así son dos lecturas planas (~4.600 filas).
+  const [collections, comics] = await Promise.all([
+    db.prepare('SELECT id, issues FROM collections WHERE issues IS NOT NULL')
+      .all<{ id: number; issues: string }>(),
+    db.prepare('SELECT collection_id, number, whakoom_id FROM comics WHERE collection_id IS NOT NULL')
+      .all<{ collection_id: number; number: unknown; whakoom_id: string | null }>(),
+  ]);
+
+  // Números que tengo de cada colección (como CAST(... AS INTEGER) de SQLite).
+  const ownedNumbers = new Map<number, Set<number>>();
+  for (const c of comics.results) {
+    const n = sqliteInt(c.number);
+    if (n === null) continue;
+    let set = ownedNumbers.get(c.collection_id);
+    if (!set) ownedNumbers.set(c.collection_id, set = new Set());
+    set.add(n);
+  }
 
   const ownedSet = new Set<string>();
   const collMap = new Map<string, number>();
-  for (const r of rows.results) {
-    if (r.wk_id) {
-      ownedSet.add(r.wk_id);
-      collMap.set(r.wk_id, r.col_id);
+  for (const co of collections.results) {
+    const have = ownedNumbers.get(co.id);
+    if (!have) continue;
+    let issues: unknown;
+    try { issues = JSON.parse(co.issues); } catch { continue; }
+    if (!Array.isArray(issues)) continue;
+    for (const issue of issues as { id?: unknown; number?: unknown }[]) {
+      const n = sqliteInt(issue?.number);
+      if (n === null || !have.has(n) || issue.id == null || issue.id === '') continue;
+      const wkId = String(issue.id);
+      ownedSet.add(wkId);
+      collMap.set(wkId, co.id);
     }
   }
 
   // Fallback: comics.whakoom_id (para futuros imports que lo rellenen)
-  const byId = await db
-    .prepare("SELECT whakoom_id, collection_id FROM comics WHERE whakoom_id IS NOT NULL AND whakoom_id != '' AND collection_id IS NOT NULL")
-    .all<{ whakoom_id: string; collection_id: number }>();
-  for (const r of byId.results) {
-    ownedSet.add(r.whakoom_id);
-    if (!collMap.has(r.whakoom_id)) collMap.set(r.whakoom_id, r.collection_id);
+  for (const c of comics.results) {
+    if (!c.whakoom_id) continue;
+    ownedSet.add(c.whakoom_id);
+    if (!collMap.has(c.whakoom_id)) collMap.set(c.whakoom_id, c.collection_id);
   }
 
   return { ownedSet, collMap };
+}
+
+/**
+ * CAST(x AS INTEGER) de SQLite: NULL → null; número → truncado; texto → el
+ * entero del principio ("12a" → 12, "1.5" → 1) o 0 si no empieza por cifra.
+ */
+function sqliteInt(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  const m = /^\s*([+-]?\d+)/.exec(String(v));
+  return m ? parseInt(m[1], 10) : 0;
 }
 
 // Compatibilidad: solo el Set (para comics.ts que solo lo necesita para filtrar)
