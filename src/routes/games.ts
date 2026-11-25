@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth';
 import { now, foldedLike } from '../db/helpers';
 import { searchGames, gameDetail, PS_PLATFORMS } from '../services/igdb';
 import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
+import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
 // edición). Ver migrations/0017_games.sql.
@@ -31,6 +32,8 @@ function shapeGame(r: Record<string, unknown>) {
     platforms: sortPlatforms(r['platforms']),
     formats: String(r['formats'] ?? '').split(',').filter(Boolean),
     copies_count: Number(r['copies_count'] ?? 0),
+    has_platinum: r['has_platinum'] === 1,
+    trophy_progress: r['trophy_progress'] == null ? null : Number(r['trophy_progress']),
   };
 }
 
@@ -41,7 +44,9 @@ function shapeCopy(r: Record<string, unknown>) {
 const AGGREGATES = `
   (SELECT GROUP_CONCAT(DISTINCT platform) FROM game_copies WHERE game_id = g.id) AS platforms,
   (SELECT GROUP_CONCAT(DISTINCT format)   FROM game_copies WHERE game_id = g.id) AS formats,
-  (SELECT COUNT(*)                        FROM game_copies WHERE game_id = g.id) AS copies_count`;
+  (SELECT COUNT(*)                        FROM game_copies WHERE game_id = g.id) AS copies_count,
+  (SELECT MAX(earned_platinum > 0)        FROM game_trophy_lists WHERE game_id = g.id) AS has_platinum,
+  (SELECT MAX(progress)                   FROM game_trophy_lists WHERE game_id = g.id) AS trophy_progress`;
 
 function copyValues(b: Body): { error: string } | { values: unknown[] } {
   const platform = str(b, 'platform');
@@ -124,6 +129,83 @@ games.get('/igdb/:igdbId', async (c) => {
   }
 });
 
+// ── Trofeos (fase 2) ─────────────────────────────────────────────────────────
+
+const TROPHY_LIST_COLUMNS = `l.id, l.np_communication_id, l.title, l.icon_url, l.platforms, l.progress,
+  l.earned_platinum, l.earned_gold, l.earned_silver, l.earned_bronze,
+  l.defined_platinum, l.defined_gold, l.defined_silver, l.defined_bronze,
+  l.platinum_at, l.last_played_at, l.game_id, l.link_state`;
+
+// GET /games/trophies/status — última sincronización y recuento de listas
+games.get('/trophies/status', async (c) => {
+  const [synced, counts] = await Promise.all([
+    c.env.DB.prepare("SELECT value FROM settings WHERE key = 'trophies_synced_at'").first<{ value: string }>(),
+    c.env.DB.prepare(`SELECT
+        COUNT(*) AS total,
+        SUM(game_id IS NOT NULL) AS linked,
+        SUM(game_id IS NULL AND (link_state IS NULL OR link_state != 'ignored')) AS pending,
+        SUM(link_state = 'ignored') AS ignored,
+        SUM(earned_platinum > 0) AS platinums
+      FROM game_trophy_lists`).first<Record<string, number | null>>(),
+  ]);
+  return c.json({
+    synced_at: synced?.value ?? null,
+    connected: !!c.env.TROFEOS,
+    total: counts?.total ?? 0, linked: counts?.linked ?? 0, pending: counts?.pending ?? 0,
+    ignored: counts?.ignored ?? 0, platinums: counts?.platinums ?? 0,
+  });
+});
+
+// POST /games/trophies/sync — sin esperar al cron diario
+games.post('/trophies/sync', async (c) => {
+  try {
+    return c.json(await syncTrophies(c.env));
+  } catch (err) {
+    return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
+  }
+});
+
+// GET /games/trophies/lists?state=pending|ignored|linked&q= — para enlazarlas
+games.get('/trophies/lists', async (c) => {
+  const state = c.req.query('state') ?? 'pending';
+  const q = (c.req.query('q') ?? '').trim();
+  const where = [
+    state === 'ignored' ? "l.link_state = 'ignored'"
+      : state === 'linked' ? 'l.game_id IS NOT NULL'
+      : "l.game_id IS NULL AND (l.link_state IS NULL OR l.link_state != 'ignored')",
+  ];
+  const params: unknown[] = [];
+  if (q) { const f = foldedLike(['l.title'], q); where.push(`(${f.sql})`); params.push(...f.params); }
+  const rows = await c.env.DB.prepare(`
+    SELECT ${TROPHY_LIST_COLUMNS}, g.title AS game_title
+    FROM game_trophy_lists l LEFT JOIN games g ON g.id = l.game_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY l.last_played_at DESC`).bind(...params).all();
+  return c.json({ data: rows.results });
+});
+
+// PUT /games/trophies/lists/:id — { game_id } enlaza, { game_id: null } desenlaza,
+// { ignored: true|false } la saca o la devuelve a pendientes
+games.put('/trophies/lists/:id{[0-9]+}', async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json<Body>();
+  if ('ignored' in body) {
+    await c.env.DB.prepare(`UPDATE game_trophy_lists SET game_id = NULL, link_state = ? WHERE id = ?`)
+      .bind(body['ignored'] ? 'ignored' : null, id).run();
+    return c.json({ ok: true });
+  }
+  const gameId = num(body, 'game_id');
+  if (gameId != null) {
+    const g = await c.env.DB.prepare('SELECT id FROM games WHERE id = ?').bind(gameId).first();
+    if (!g) return c.json({ error: 'Ese juego no existe' }, 404);
+  }
+  // Decisión del usuario: la sincronización ya no la vuelve a enlazar sola.
+  await c.env.DB.prepare(`UPDATE game_trophy_lists SET game_id = ?, link_state = 'manual' WHERE id = ?`)
+    .bind(gameId, id).run();
+  if (gameId != null) await applyPlatinums(c.env.DB);
+  return c.json({ ok: true });
+});
+
 // ── Juegos ───────────────────────────────────────────────────────────────────
 
 // GET /games/facets — para los filtros del listado
@@ -190,10 +272,13 @@ games.get('/:id{[0-9]+}', async (c) => {
   const game = await c.env.DB.prepare(`SELECT g.*, ${AGGREGATES} FROM games g WHERE g.id = ?`).bind(id)
     .first<Record<string, unknown>>();
   if (!game) return c.json({ error: 'No encontrado' }, 404);
-  const copies = await c.env.DB.prepare(
-    'SELECT * FROM game_copies WHERE game_id = ? ORDER BY platform, format, id'
-  ).bind(id).all<Record<string, unknown>>();
-  return c.json({ ...shapeGame(game), copies: copies.results.map(shapeCopy) });
+  const [copies, lists] = await Promise.all([
+    c.env.DB.prepare('SELECT * FROM game_copies WHERE game_id = ? ORDER BY platform, format, id')
+      .bind(id).all<Record<string, unknown>>(),
+    c.env.DB.prepare(`SELECT ${TROPHY_LIST_COLUMNS} FROM game_trophy_lists l WHERE l.game_id = ? ORDER BY l.platforms DESC`)
+      .bind(id).all<Record<string, unknown>>(),
+  ]);
+  return c.json({ ...shapeGame(game), copies: copies.results.map(shapeCopy), trophy_lists: lists.results });
 });
 
 function gameValues(b: Body) {
@@ -235,6 +320,20 @@ games.post('/', async (c) => {
     await c.env.DB.batch(copyRows.map(r => c.env.DB.prepare(
       `INSERT INTO game_copies (game_id, ${COPY_COLUMNS}, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(gameId, ...(r as { values: unknown[] }).values, t, t)));
+  }
+
+  // Listas de trofeos: la que se eligió al darlo de alta desde "Trofeos" y las
+  // pendientes con el mismo título. Si falla, el juego ya está guardado.
+  try {
+    const listId = num(body, 'trophy_list_id');
+    if (listId != null) {
+      await c.env.DB.prepare(`UPDATE game_trophy_lists SET game_id = ?, link_state = 'manual' WHERE id = ?`)
+        .bind(gameId, listId).run();
+      await applyPlatinums(c.env.DB);
+    }
+    await linkListsToGame(c.env, gameId);
+  } catch (err) {
+    console.error('trofeos al dar de alta:', err);
   }
 
   return c.json({ id: gameId }, 201);

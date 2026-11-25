@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { AppContext, Env } from './types';
 import { resyncTrackedCollections, refreshWantedReleaseMonths } from './cron';
+import { syncTrophies } from './services/trophies';
 import { auth } from './routes/auth';
 import { comics } from './routes/comics';
 import { books } from './routes/books';
@@ -62,7 +63,14 @@ app.notFound((c) => c.json({ error: 'Ruta no encontrada' }, 404));
 // y la fecha de salida de la lista "Lo quiero" (por si la editorial la retrasa).
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    if (event.cron === '30 6 * * *') {
+      ctx.waitUntil(syncTrophies(env).then(
+        r => console.log('trofeos:', JSON.stringify(r)),
+        e => console.error('trofeos:', e),
+      ));
+      return;
+    }
     ctx.waitUntil(resyncTrackedCollections(env).finally(() => refreshWantedReleaseMonths(env)));
   },
 };

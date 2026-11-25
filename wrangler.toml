@@ -21,7 +21,16 @@ bucket_name = "inventario-covers"
 # números de las colecciones con tracking para que salgan las novedades sin
 # tener que entrar en cada colección. 06:00 UTC (~08:00 España en verano).
 [triggers]
-crons = ["0 6 * * *"]
+# 06:30: trofeos de PSN (fase 2 de videojuegos), en su propia invocación para no
+# sumar subpeticiones ni consultas a D1 a las del refresco de cómics.
+crons = ["0 6 * * *", "30 6 * * *"]
 
 [dev]
 port = 8787
+
+# Worker Trofeos (misma cuenta): da el token de PSN y las fechas de los platinos
+# por RPC. La NPSSO solo se renueva allí. Ver src/services/trophies.ts.
+[[services]]
+binding = "TROFEOS"
+service = "trofeos"
+entrypoint = "TrofeosRpc"

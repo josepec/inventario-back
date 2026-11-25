@@ -428,7 +428,8 @@ stats.get('/dashboard/games', async (c) => {
     db.prepare(`
       SELECT COUNT(*) AS games,
         SUM(status = 'completed') AS completed, SUM(status = 'playing') AS playing,
-        SUM(status = 'pending') AS pending, SUM(status = 'abandoned') AS abandoned
+        SUM(status = 'pending') AS pending, SUM(status = 'abandoned') AS abandoned,
+        (SELECT COUNT(DISTINCT game_id) FROM game_trophy_lists WHERE game_id IS NOT NULL AND earned_platinum > 0) AS platinums
       FROM games
     `).first<Record<string, number>>(),
     db.prepare(`SELECT format, COUNT(*) AS copies, COUNT(DISTINCT game_id) AS games FROM game_copies GROUP BY format`)
@@ -475,6 +476,7 @@ stats.get('/dashboard/games', async (c) => {
       playing: totals?.playing ?? 0,
       pending: totals?.pending ?? 0,
       abandoned: totals?.abandoned ?? 0,
+      platinums: totals?.platinums ?? 0,
       physical: fmt('physical').games,
       digital: fmt('digital').games,
     },

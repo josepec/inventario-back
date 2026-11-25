@@ -14,6 +14,17 @@ export interface Env {
   /** App de Twitch para IGDB (videojuegos). Ver services/igdb.ts. */
   IGDB_CLIENT_ID?: string;
   IGDB_CLIENT_SECRET?: string;
+  /**
+   * Worker Trofeos (service binding, entrypoint TrofeosRpc): el único que se
+   * autentica con PSN. Ver services/trophies.ts.
+   */
+  TROFEOS?: TrofeosRpc;
+}
+
+/** Lo que expone el Worker Trofeos por RPC (E:\Proyectos\Trofeos\src\rpc.ts). */
+export interface TrofeosRpc {
+  tokenAcceso(): Promise<string>;
+  platinos(): Promise<Record<string, { fecha: string | null }>>;
 }
 
 export interface JwtPayload {
