@@ -47,6 +47,7 @@ export function titleKey(title: string): string {
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/[™®©]/g, '')
+    .replace(/∀/g, 'a')
     .replace(/\s*[([]?\b(?:ps[345]|playstation\s*[345]|ps\s?vita)\b[)\]]?\s*(?:edition)?\s*$/i, '')
     .replace(/\s+trophies$/i, '')
     .replace(/&/g, 'and')

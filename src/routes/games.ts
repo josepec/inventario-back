@@ -5,6 +5,7 @@ import { now, foldedLike } from '../db/helpers';
 import { searchGames, gameDetail, PS_PLATFORMS } from '../services/igdb';
 import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
+import { importCandidate, linkDlcs, PsnCopy, PsnDlc, readPsnLibrary, saveDlcs } from '../services/psn-library';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
 // edición). Ver migrations/0017_games.sql.
@@ -206,6 +207,40 @@ games.put('/trophies/lists/:id{[0-9]+}', async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Compras de PSN (fase 3) ──────────────────────────────────────────────────
+
+// GET /games/psn/library — lo comprado en la Store, clasificado, para revisarlo
+games.get('/psn/library', async (c) => {
+  try {
+    return c.json(await readPsnLibrary(c.env));
+  } catch (err) {
+    return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
+  }
+});
+
+// POST /games/psn/import — un juego (con sus copias digitales) por llamada:
+// cada uno pide IGDB y la portada, y así no se pasa del límite de subpeticiones.
+games.post('/psn/import', async (c) => {
+  const body = await c.req.json<{ title?: string; copies?: PsnCopy[]; game_id?: number | null }>();
+  const copies = (body.copies ?? []).filter(x =>
+    x && typeof x.title_id === 'string' && ['PS3', 'PS4', 'PS5'].includes(x.platform));
+  if (!body.title?.trim() || !copies.length) return c.json({ error: 'Faltan el título o las copias' }, 400);
+  try {
+    const r = await importCandidate(c.env, { title: body.title.trim(), copies, game_id: body.game_id ?? null },
+      new URL(c.req.url).origin);
+    return c.json(r);
+  } catch (err) {
+    return c.json({ error: String(err instanceof Error ? err.message : err) }, 502);
+  }
+});
+
+// POST /games/psn/dlcs — { dlcs } todos de una vez; se enlazan con su juego
+games.post('/psn/dlcs', async (c) => {
+  const body = await c.req.json<{ dlcs?: PsnDlc[] }>();
+  const dlcs = (body.dlcs ?? []).filter(d => d && typeof d.entitlement_id === 'string' && typeof d.name === 'string');
+  return c.json(await saveDlcs(c.env, dlcs));
+});
+
 // ── Juegos ───────────────────────────────────────────────────────────────────
 
 // GET /games/facets — para los filtros del listado
@@ -272,13 +307,17 @@ games.get('/:id{[0-9]+}', async (c) => {
   const game = await c.env.DB.prepare(`SELECT g.*, ${AGGREGATES} FROM games g WHERE g.id = ?`).bind(id)
     .first<Record<string, unknown>>();
   if (!game) return c.json({ error: 'No encontrado' }, 404);
-  const [copies, lists] = await Promise.all([
+  const [copies, lists, dlcs] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM game_copies WHERE game_id = ? ORDER BY platform, format, id')
       .bind(id).all<Record<string, unknown>>(),
     c.env.DB.prepare(`SELECT ${TROPHY_LIST_COLUMNS} FROM game_trophy_lists l WHERE l.game_id = ? ORDER BY l.platforms DESC`)
       .bind(id).all<Record<string, unknown>>(),
+    c.env.DB.prepare('SELECT id, name, platform, acquired_at, icon_url FROM game_dlcs WHERE game_id = ? ORDER BY acquired_at, name')
+      .bind(id).all<Record<string, unknown>>(),
   ]);
-  return c.json({ ...shapeGame(game), copies: copies.results.map(shapeCopy), trophy_lists: lists.results });
+  return c.json({
+    ...shapeGame(game), copies: copies.results.map(shapeCopy), trophy_lists: lists.results, dlcs: dlcs.results,
+  });
 });
 
 function gameValues(b: Body) {
@@ -332,8 +371,9 @@ games.post('/', async (c) => {
       await applyPlatinums(c.env.DB);
     }
     await linkListsToGame(c.env, gameId);
+    await linkDlcs(c.env.DB);
   } catch (err) {
-    console.error('trofeos al dar de alta:', err);
+    console.error('trofeos/DLC al dar de alta:', err);
   }
 
   return c.json({ id: gameId }, 201);
