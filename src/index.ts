@@ -12,6 +12,7 @@ import { collections } from './routes/collections';
 import { covers } from './routes/covers';
 import { googleBooks } from './routes/google-books';
 import { wanted } from './routes/wanted';
+import { games } from './routes/games';
 
 const app = new Hono<AppContext>();
 
@@ -45,6 +46,7 @@ app.route('/collections', collections);
 app.route('/covers', covers);
 app.route('/google-books', googleBooks);
 app.route('/wanted', wanted);
+app.route('/games', games);
 
 // Health check
 app.get('/health', (c) => c.json({ ok: true, ts: new Date().toISOString() }));

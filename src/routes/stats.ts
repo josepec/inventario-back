@@ -410,4 +410,84 @@ stats.get('/dashboard/books', async (c) => {
   });
 });
 
+// Dashboard — videojuegos
+//
+// "Añadido" es la fecha de la primera copia (acquired_at; la de compra cuando
+// venga de PSN) y, si no la tiene, la de alta en la app. "Pasado" es
+// completed_at, que mantienen triggers (migrations/0017_games.sql), igual que
+// read_at en cómics y libros.
+stats.get('/dashboard/games', async (c) => {
+  const db = c.env.DB;
+  const statsStartRow = await db.prepare("SELECT value FROM settings WHERE key = 'stats_start_date'").first<{ value: string }>();
+  const statsStartDate = statsStartRow?.value ?? null;
+
+  const ADDED = `(SELECT COALESCE((SELECT MIN(acquired_at) FROM game_copies WHERE game_id = g.id), g.created_at) AS d FROM games g)`;
+  const empty = Promise.resolve({ results: [] as { month: string; count: number }[] });
+
+  const [totals, formats, byPlatform, genreRows, monthlyAdded, monthlyCompleted, recent, spent, thisYear, prevYear] = await Promise.all([
+    db.prepare(`
+      SELECT COUNT(*) AS games,
+        SUM(status = 'completed') AS completed, SUM(status = 'playing') AS playing,
+        SUM(status = 'pending') AS pending, SUM(status = 'abandoned') AS abandoned
+      FROM games
+    `).first<Record<string, number>>(),
+    db.prepare(`SELECT format, COUNT(*) AS copies, COUNT(DISTINCT game_id) AS games FROM game_copies GROUP BY format`)
+      .all<{ format: string; copies: number; games: number }>(),
+    db.prepare(`SELECT platform, COUNT(DISTINCT game_id) AS count FROM game_copies GROUP BY platform`)
+      .all<{ platform: string; count: number }>(),
+    db.prepare("SELECT genres FROM games WHERE genres IS NOT NULL AND genres != ''").all<{ genres: string }>(),
+    statsStartDate
+      ? db.prepare(`SELECT strftime('%Y-%m', d) AS month, COUNT(*) AS count FROM ${ADDED}
+          WHERE d >= ? AND d >= date('now', '-12 months') GROUP BY month ORDER BY month`)
+          .bind(statsStartDate).all<{ month: string; count: number }>()
+      : empty,
+    statsStartDate
+      ? db.prepare(`SELECT strftime('%Y-%m', completed_at) AS month, COUNT(*) AS count FROM games
+          WHERE status = 'completed' AND completed_at >= ? AND completed_at >= date('now', '-12 months')
+          GROUP BY month ORDER BY month`)
+          .bind(statsStartDate).all<{ month: string; count: number }>()
+      : empty,
+    db.prepare(`SELECT id, title, cover_url, status, created_at FROM games ORDER BY created_at DESC, id DESC LIMIT 12`)
+      .all<{ id: number; title: string; cover_url: string | null; status: string; created_at: string }>(),
+    db.prepare(`SELECT COALESCE(SUM(price), 0) AS total, COUNT(price) AS priced FROM game_copies WHERE price IS NOT NULL AND is_free = 0`)
+      .first<{ total: number; priced: number }>(),
+    db.prepare(`SELECT
+        (SELECT COUNT(*) FROM ${ADDED} WHERE strftime('%Y', d) = strftime('%Y', 'now')) AS added,
+        (SELECT COUNT(*) FROM games WHERE status = 'completed' AND strftime('%Y', completed_at) = strftime('%Y', 'now')) AS completed`)
+      .first<{ added: number; completed: number }>(),
+    db.prepare(`SELECT
+        (SELECT COUNT(*) FROM ${ADDED} WHERE strftime('%Y', d) = strftime('%Y', 'now', '-1 year')) AS added,
+        (SELECT COUNT(*) FROM games WHERE status = 'completed' AND strftime('%Y', completed_at) = strftime('%Y', 'now', '-1 year')) AS completed`)
+      .first<{ added: number; completed: number }>(),
+  ]);
+
+  const PLATFORM_ORDER = ['PS1', 'PS2', 'PS3', 'PS4', 'PS5', 'PSP'];
+  const genreCount = new Map<string, number>();
+  for (const r of genreRows.results) {
+    for (const g of r.genres.split(',').map(s => s.trim()).filter(Boolean)) genreCount.set(g, (genreCount.get(g) ?? 0) + 1);
+  }
+  const fmt = (f: string) => formats.results.find(r => r.format === f) ?? { copies: 0, games: 0 };
+
+  return c.json({
+    totals: {
+      games: totals?.games ?? 0,
+      completed: totals?.completed ?? 0,
+      playing: totals?.playing ?? 0,
+      pending: totals?.pending ?? 0,
+      abandoned: totals?.abandoned ?? 0,
+      physical: fmt('physical').games,
+      digital: fmt('digital').games,
+    },
+    monthly: { added: monthlyAdded.results, completed: monthlyCompleted.results },
+    byPlatform: byPlatform.results.sort((a, b) => PLATFORM_ORDER.indexOf(a.platform) - PLATFORM_ORDER.indexOf(b.platform)),
+    byGenre: [...genreCount.entries()].map(([genre, count]) => ({ genre, count }))
+      .sort((a, b) => b.count - a.count).slice(0, 8),
+    recentGames: recent.results,
+    spending: { total: spent?.total ?? 0, priced: spent?.priced ?? 0 },
+    thisYear: thisYear ?? { added: 0, completed: 0 },
+    prevYear: prevYear ?? { added: 0, completed: 0 },
+    statsStartDate,
+  });
+});
+
 export { stats };

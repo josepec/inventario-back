@@ -11,6 +11,9 @@ export interface Env {
    *   wrangler secret put GOOGLE_BOOKS_KEY
    */
   GOOGLE_BOOKS_KEY?: string;
+  /** App de Twitch para IGDB (videojuegos). Ver services/igdb.ts. */
+  IGDB_CLIENT_ID?: string;
+  IGDB_CLIENT_SECRET?: string;
 }
 
 export interface JwtPayload {
