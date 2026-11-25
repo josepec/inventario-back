@@ -38,15 +38,18 @@ export function listPlatforms(raw: string): string[] {
 
 /**
  * Clave para comparar títulos de PSN con los de IGDB: sin mayúsculas, tildes,
- * marcas, sufijos de plataforma ni puntuación.
+ * marcas, sufijos de plataforma ni puntuación. NFKD convierte además los
+ * números romanos de un solo carácter que usa PSN ("FINAL FANTASY Ⅱ" → "II");
+ * sin eso se perdían y FF II, III y IV acababan en el FF I.
  *   "FINAL FANTASY TACTICS - The Ivalice Chronicles" ≡ "Final Fantasy Tactics: The Ivalice Chronicles"
  *   "Marvel's Spider-Man 2 (PS5)" ≡ "Marvel’s Spider-Man 2"
  */
 export function titleKey(title: string): string {
   return title
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[™®©]/g, '')          // antes de NFKD, que haría de ™ "TM"
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
     .toLowerCase()
-    .replace(/[™®©]/g, '')
+    .replace(/^trofeos de\s+/, '')
     .replace(/∀/g, 'a')
     .replace(/\s*[([]?\b(?:ps[345]|playstation\s*[345]|ps\s?vita)\b[)\]]?\s*(?:edition)?\s*$/i, '')
     .replace(/\s+trophies$/i, '')

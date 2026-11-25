@@ -270,11 +270,16 @@ games.get('/', async (c) => {
   const format = c.req.query('format') ?? '';
   const genre = c.req.query('genre') ?? '';
   const franchise = c.req.query('franchise') ?? '';
-  const sort = c.req.query('sort') ?? 'created_at';
+  const sort = c.req.query('sort') ?? 'acquired_at';
   const order = c.req.query('order') === 'asc' ? 'ASC' : 'DESC';
 
-  const allowedSort = ['created_at', 'updated_at', 'title', 'first_release_date', 'completed_at', 'rating'];
-  const safeSort = allowedSort.includes(sort) ? sort : 'created_at';
+  // "Recientes" = la última copia que se compró; sin fecha de compra, cuando se dio de alta.
+  const SORTS: Record<string, string> = {
+    acquired_at: 'COALESCE((SELECT MAX(acquired_at) FROM game_copies WHERE game_id = g.id), g.created_at)',
+    created_at: 'g.created_at', updated_at: 'g.updated_at', title: 'g.title',
+    first_release_date: 'g.first_release_date', completed_at: 'g.completed_at', rating: 'g.rating',
+  };
+  const sortExpr = SORTS[sort] ?? SORTS['acquired_at'];
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -288,13 +293,15 @@ games.get('/', async (c) => {
   if (format) { conditions.push('EXISTS (SELECT 1 FROM game_copies WHERE game_id = g.id AND format = ?)'); params.push(format); }
   if (genre) { conditions.push("(',' || REPLACE(g.genres, ', ', ',') || ',') LIKE ?"); params.push(`%,${genre},%`); }
   if (franchise) { conditions.push('g.franchise = ?'); params.push(franchise); }
+  const ratingMin = Number(c.req.query('rating_min'));
+  if (ratingMin > 0) { conditions.push('g.rating >= ?'); params.push(ratingMin); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const [count, rows] = await Promise.all([
     c.env.DB.prepare(`SELECT COUNT(*) AS count FROM games g ${where}`).bind(...params).first<{ count: number }>(),
     c.env.DB.prepare(
       `SELECT g.*, ${AGGREGATES} FROM games g ${where}
-       ORDER BY g.${safeSort} IS NULL, g.${safeSort} ${order}, g.id DESC LIMIT ? OFFSET ?`
+       ORDER BY ${sortExpr} IS NULL, ${sortExpr} ${order}, g.id DESC LIMIT ? OFFSET ?`
     ).bind(...params, limit, (page - 1) * limit).all<Record<string, unknown>>(),
   ]);
 
