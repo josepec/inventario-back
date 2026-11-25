@@ -26,8 +26,10 @@ app.use('*', cors({
       'https://inventario.josepec.eu',
     ];
     if (!origin || allowed.includes(origin)) return origin ?? '*';
-    // Permite previews de Pages (deploy URLs únicas)
+    // Permite previews de Pages (deploy URLs únicas y alias de rama).
+    // El proyecto de Pages se llama "inventario" → inventario-cb7.pages.dev.
     if (origin.endsWith('.inventario-front.pages.dev')) return origin;
+    if (origin === 'https://inventario-cb7.pages.dev' || origin.endsWith('.inventario-cb7.pages.dev')) return origin;
     return null;
   },
   allowHeaders: ['Content-Type', 'Authorization'],
