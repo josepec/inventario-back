@@ -1,5 +1,5 @@
 import { Env } from './types';
-import { fetchEdition } from './routes/whakoom';
+import { fetchEdition, whakoomFetch, extractDatePublished } from './routes/whakoom';
 import { now } from './db/helpers';
 
 // Resincroniza el catálogo de números (issues) de todas las colecciones con
@@ -63,4 +63,48 @@ export async function resyncTrackedCollections(
   }
 
   return { synced, failed, total: results.length };
+}
+
+// Refresca release_month de la lista "Lo quiero". El mes se guarda al marcarlo
+// y antes no se tocaba nunca: si la editorial retrasaba la salida (El depravado,
+// añadido para octubre y movido al 20/11), seguia en su mes viejo, desaparecia
+// de "Mis novedades" del mes real y salia en Atrasados. Solo se mira lo de este
+// mes en adelante o del mes pasado (un retraso tipico); lo mas antiguo ya salio.
+// Si la ficha no trae fecha propia, se conserva la que habia.
+export async function refreshWantedReleaseMonths(
+  env: Env,
+): Promise<{ checked: number; changed: number; failed: number }> {
+  const d = new Date();
+  const prev = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+  const prevMonth = `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  const { results } = await env.DB.prepare(
+    `SELECT whakoom_comic_id, comics_url_path, release_month FROM wanted_comics
+      WHERE release_month IS NULL OR release_month >= ?`
+  ).bind(prevMonth).all<{ whakoom_comic_id: string; comics_url_path: string | null; release_month: string | null }>();
+
+  let changed = 0;
+  let failed = 0;
+
+  for (const w of results) {
+    try {
+      const path = w.comics_url_path || `/comics/${w.whakoom_comic_id}`;
+      const res = await whakoomFetch(`https://www.whakoom.com${path}`, env);
+      const html = res.ok ? await res.text() : '';
+      if (!html || html.includes('/login?ReturnUrl')) { failed++; continue; }
+
+      const date = extractDatePublished(html);
+      const month = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
+      if (month && month !== w.release_month) {
+        await env.DB.prepare('UPDATE wanted_comics SET release_month = ? WHERE whakoom_comic_id = ?')
+          .bind(month, w.whakoom_comic_id).run();
+        changed++;
+      }
+    } catch {
+      failed++;
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+
+  return { checked: results.length, changed, failed };
 }

@@ -481,6 +481,16 @@ function decodeEntities(s: string): string {
     .replace(/&amp;/g, '&');
 }
 
+// Fecha de publicacion propia del comic/edicion ("YYYY-MM-DD" o '').
+// Whakoom la pone en <p itemprop="datePublished" content="...">, pero cada
+// reseña de lector lleva tambien <meta itemprop="datePublished">. Si la ficha no
+// tiene fecha, el primer match era la fecha de una reseña (p.ej. "Perdidos entre
+// la hierba" quedaba en 2025-02 por una reseña de ese mes): se excluye <meta>.
+export function extractDatePublished(html: string): string {
+  const m = html.match(/<(?!meta\b)[a-z]+\b[^>]*itemprop="datePublished"[^>]*content="([^"]+)"/i);
+  return m ? m[1] : '';
+}
+
 // Limpia un fragmento HTML a texto plano: quita tags, decodifica entidades y
 // normaliza espacios. Punto único por el que pasa todo el texto raspado.
 function clean(s: string): string {
@@ -579,8 +589,7 @@ function parseComic(html: string, id: string) {
   }
 
   const isbn = itemprop('isbn');
-  const dateRaw = html.match(/itemprop="datePublished"[^>]+content="([^"]+)"/i);
-  const date = dateRaw ? dateRaw[1] : '';
+  const date = extractDatePublished(html);
   const language = itemprop('inLanguage');
 
   // "Sobre esta edición" — páginas, encuadernación, precio
@@ -899,8 +908,7 @@ function parseEdition(html: string, id: string) {
   const cover = coverMatch ? coverMatch[1] : og('image');
 
   // Fecha de publicacion (para derivar release_month en el front)
-  const dateRaw = html.match(/itemprop="datePublished"[^>]+content="([^"]+)"/i);
-  const date = dateRaw ? dateRaw[1] : '';
+  const date = extractDatePublished(html);
 
   // "Sobre esta edición" → edition details (format, size, etc.)
   const aboutEdMatch = html.match(/class="about-this-edition"[\s\S]*?<p>([^<]+)<\/p>/i)
