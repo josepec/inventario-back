@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { AppContext } from '../types';
 import { requireAuth } from '../middleware/auth';
 import { now, foldedLike } from '../db/helpers';
-import { searchGames, gameDetail, PS_PLATFORMS } from '../services/igdb';
+import { searchGames, gameDetail, findByAsin, PS_PLATFORMS } from '../services/igdb';
 import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
 import { gameCoverOptions } from '../services/game-covers';
@@ -112,7 +112,10 @@ games.get('/barcode/:ean', async (c) => {
     // castellano, plataforma, parecido). El front lo elige solo, como libros.
     let best: number | null = null;
     try {
-      best = await matchIgdb(c.env, product.name || product.title, product.platform, null);
+      // Primero por el ASIN de Amazon.es (exacto); si IGDB no lo tiene, por el nombre.
+      const byAsin = product.asin ? await findByAsin(c.env, product.asin).catch(() => null) : null;
+      if (byAsin && !product.platform && byAsin.platform) product.platform = byAsin.platform;
+      best = byAsin?.igdb_id ?? await matchIgdb(c.env, product.name || product.title, product.platform, null);
       if (best && !results.some(r => r.igdb_id === best)) {
         const d = await gameDetail(c.env, best);
         if (d) {

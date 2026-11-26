@@ -25,6 +25,8 @@ export interface BarcodeProduct {
   title: string;
   platform: PsPlatform | null;
   source: 'amazon' | 'upcitemdb';
+  /** ASIN del producto en Amazon.es: IGDB lo tiene enlazado a su juego (exacto, sin depender del nombre). */
+  asin?: string | null;
 }
 
 export function cleanEan(raw: string): string {
@@ -93,7 +95,7 @@ export function parseProductTitle(raw: string): Omit<BarcodeProduct, 'source'> {
 
 // ── Fuentes ──────────────────────────────────────────────────────────────────
 
-async function amazonTitle(ean: string): Promise<string | null> {
+async function amazonTitle(ean: string): Promise<{ title: string; asin: string | null } | null> {
   const res = await safeFetch(`https://www.amazon.es/s?k=${ean}&i=videogames`, {
     headers: { Accept: 'text/html', 'Accept-Language': 'es-ES,es;q=0.9' },
   });
@@ -108,7 +110,9 @@ async function amazonTitle(ean: string): Promise<string | null> {
     if (/AdHolder|s-sponsored/i.test(b.slice(0, 3000))) continue;
     const h2 = b.match(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i)?.[1];
     const title = stripHtml(h2 ?? b.match(/<h2\b[^>]*aria-label="([^"]+)"/i)?.[1]);
-    if (title) return title;
+    // El ASIN, del enlace al producto (/dp/B0...).
+    const asin = b.match(/\/dp\/(B[0-9A-Z]{9})/)?.[1] ?? null;
+    if (title) return { title, asin };
   }
   return null;
 }
@@ -130,9 +134,9 @@ export async function lookupGameBarcode(ean: string): Promise<BarcodeProduct | n
     upcItemDbTitle(ean).catch(() => null),
   ]);
   // Amazon suele decir la plataforma; si no, se toma la de UPCitemdb.
-  const a = amazon ? parseProductTitle(amazon) : null;
+  const a = amazon ? parseProductTitle(amazon.title) : null;
   const u = upc ? parseProductTitle(upc) : null;
-  if (a) return { ...a, platform: a.platform ?? u?.platform ?? null, source: 'amazon' };
+  if (a) return { ...a, platform: a.platform ?? u?.platform ?? null, source: 'amazon', asin: amazon!.asin };
   if (u) return { ...u, source: 'upcitemdb' };
   return null;
 }

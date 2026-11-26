@@ -198,6 +198,19 @@ export async function alternativeNames(env: IgdbEnv, igdbIds: number[]): Promise
   return out;
 }
 
+/**
+ * El juego (y la plataforma) de un producto de Amazon por su ASIN: IGDB
+ * enlaza cada edición de cada tienda de Amazon (Amazon.es incluida) con su
+ * juego. Es la forma exacta de ir del código de barras al juego.
+ */
+export async function findByAsin(env: IgdbEnv, asin: string): Promise<{ igdb_id: number; platform: PsPlatform | null } | null> {
+  if (!/^[A-Z0-9]{10}$/.test(asin)) return null;
+  const rows = await query<{ game?: number; platform?: number }>(env, 'external_games',
+    `fields game,platform; where uid = "${asin}" & external_game_source = 20; limit 5;`);
+  const r = rows.find(x => typeof x.game === 'number');
+  return r ? { igdb_id: r.game!, platform: r.platform != null ? PLATFORM_BY_ID.get(r.platform) ?? null : null } : null;
+}
+
 /** Todas las portadas de un juego en IGDB (la principal y las regionales), a resolución original. */
 export async function gameCovers(env: IgdbEnv, igdbId: number): Promise<{ url: string; regional: boolean }[]> {
   const rows = await query<{ image_id?: string; game_localization?: number }>(env, 'covers',
