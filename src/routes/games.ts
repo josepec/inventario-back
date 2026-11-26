@@ -5,6 +5,7 @@ import { now, foldedLike } from '../db/helpers';
 import { searchGames, gameDetail, PS_PLATFORMS } from '../services/igdb';
 import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
+import { gameCoverOptions } from '../services/game-covers';
 import { importCandidate, linkDlcs, matchIgdb, PsnCopy, PsnDlc, readPsnLibrary, saveDlcs } from '../services/psn-library';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
@@ -343,6 +344,13 @@ games.patch('/batch', async (c) => {
     `UPDATE games SET status = ?, updated_at = ? WHERE id IN (SELECT value FROM json_each(?)) AND status != ?`
   ).bind(body.status, now(), JSON.stringify(ids), body.status).run();
   return c.json({ ok: true, updated: r.meta.changes ?? 0 });
+});
+
+// GET /games/:id/covers — portadas para elegir (IGDB, PS Store, Amazon.es...)
+games.get('/:id{[0-9]+}/covers', async (c) => {
+  const options = await gameCoverOptions(c.env, Number(c.req.param('id')));
+  if (!options) return c.json({ error: 'No encontrado' }, 404);
+  return c.json({ data: options });
 });
 
 // GET /games/:id — juego con sus copias

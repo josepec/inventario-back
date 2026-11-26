@@ -198,6 +198,16 @@ export async function alternativeNames(env: IgdbEnv, igdbIds: number[]): Promise
   return out;
 }
 
+/** Todas las portadas de un juego en IGDB (la principal y las regionales), a resolución original. */
+export async function gameCovers(env: IgdbEnv, igdbId: number): Promise<{ url: string; regional: boolean }[]> {
+  const rows = await query<{ image_id?: string; game_localization?: number }>(env, 'covers',
+    `fields image_id,game_localization; where game = ${Math.trunc(igdbId)}; limit 20;`);
+  return rows.filter(r => r.image_id).map(r => ({
+    url: cover({ image_id: r.image_id! }, 't_original')!,
+    regional: !!r.game_localization,
+  }));
+}
+
 export async function gameDetail(env: IgdbEnv, id: number): Promise<IgdbGameDetail | null> {
   const [g] = await query<IgdbGame>(env, 'games',
     'fields name,summary,url,first_release_date,cover.image_id,platforms,genres.name,' +
