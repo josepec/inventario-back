@@ -6,6 +6,7 @@ import { searchGames, gameDetail, findByAsin, PS_PLATFORMS } from '../services/i
 import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
 import { gameCoverOptions } from '../services/game-covers';
+import { addToWishlist, annotatedCalendar, listWishlist } from '../services/game-releases';
 import { importCandidate, linkDlcs, matchIgdb, PsnCopy, PsnDlc, readPsnLibrary, saveDlcs } from '../services/psn-library';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
@@ -272,6 +273,43 @@ games.post('/psn/dlcs', async (c) => {
 // ── Juegos ───────────────────────────────────────────────────────────────────
 
 // GET /games/facets — para los filtros del listado
+// ── Novedades (fase 5): calendario de lanzamientos y "Lo quiero" ───────────
+
+// GET /games/releases — lo que sale en PS4/PS5 (de hace dos semanas a seis
+// meses), con si lo tienes, si lo quieres y si es de una saga tuya.
+games.get('/releases', async (c) => {
+  try {
+    return c.json({ data: await annotatedCalendar(c.env) });
+  } catch (err) {
+    console.error('calendario:', err);
+    return c.json({ error: 'IGDB no responde' }, 502);
+  }
+});
+
+// GET /games/wishlist
+games.get('/wishlist', async (c) => c.json({ data: await listWishlist(c.env) }));
+
+// POST /games/wishlist — { igdb_id }
+games.post('/wishlist', async (c) => {
+  const igdbId = num(await c.req.json<Body>(), 'igdb_id');
+  if (igdbId == null || !Number.isInteger(igdbId)) return c.json({ error: 'Falta el juego' }, 400);
+  const owned = await c.env.DB.prepare('SELECT id FROM games WHERE igdb_id = ?').bind(igdbId).first<{ id: number }>();
+  if (owned) return c.json({ error: 'Ya lo tienes', id: owned.id }, 409);
+  try {
+    const row = await addToWishlist(c.env, igdbId);
+    return row ? c.json(row, 201) : c.json({ error: 'No está en IGDB' }, 404);
+  } catch (err) {
+    console.error('lo quiero:', err);
+    return c.json({ error: 'IGDB no responde' }, 502);
+  }
+});
+
+// DELETE /games/wishlist/:igdbId
+games.delete('/wishlist/:igdbId{[0-9]+}', async (c) => {
+  await c.env.DB.prepare('DELETE FROM game_wishlist WHERE igdb_id = ?').bind(Number(c.req.param('igdbId'))).run();
+  return c.json({ ok: true });
+});
+
 games.get('/facets', async (c) => {
   const [platforms, genres, franchises] = await Promise.all([
     c.env.DB.prepare('SELECT platform, COUNT(DISTINCT game_id) AS count FROM game_copies GROUP BY platform')
@@ -433,6 +471,8 @@ games.post('/', async (c) => {
   } catch (err) {
     console.error('trofeos/DLC al dar de alta:', err);
   }
+  // Ya es tuyo: fuera de "Lo quiero".
+  if (igdbId != null) await c.env.DB.prepare('DELETE FROM game_wishlist WHERE igdb_id = ?').bind(igdbId).run();
 
   return c.json({ id: gameId }, 201);
 });

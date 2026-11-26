@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { AppContext, Env } from './types';
 import { resyncTrackedCollections, refreshWantedReleaseMonths } from './cron';
+import { refreshWishlist } from './services/game-releases';
 import { syncTrophies } from './services/trophies';
 import { auth } from './routes/auth';
 import { comics } from './routes/comics';
@@ -73,5 +74,10 @@ export default {
       return;
     }
     ctx.waitUntil(resyncTrackedCollections(env).finally(() => refreshWantedReleaseMonths(env)));
+    // "Lo quiero" de videojuegos: las fechas de salida cambian (retrasos, fecha concreta).
+    ctx.waitUntil(refreshWishlist(env).then(
+      r => console.log('lo quiero (juegos):', JSON.stringify(r)),
+      e => console.error('lo quiero (juegos):', e),
+    ));
   },
 };

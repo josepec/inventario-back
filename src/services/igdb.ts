@@ -258,3 +258,122 @@ export async function gameDetail(env: IgdbEnv, id: number): Promise<IgdbGameDeta
     release_dates,
   };
 }
+
+// ── Lanzamientos (fase 5: calendario y "Lo quiero") ─────────────────────────
+
+/** Regiones de IGDB que valen para España: Europa y mundial. */
+const REGION_EUROPE = 1;
+const REGION_WORLDWIDE = 8;
+
+export interface IgdbRelease {
+  igdb_id: number;
+  title: string;
+  cover_url: string | null;
+  platforms: PsPlatform[];
+  /** YYYY-MM-DD; con precisión menor que el día, IGDB pone el último del periodo. */
+  date: string | null;
+  /** date_format de IGDB: 0 día, 1 mes, 2 año, 3-6 trimestre, 7 sin fecha. */
+  precision: number;
+  /** Expectación en IGDB (cuánta gente lo sigue): sirve para quitar el ruido. */
+  hypes: number;
+  kind: string | null;
+  /** Franquicias y colecciones, para saber si es de una saga que tienes. */
+  sagas: string[];
+}
+
+interface IgdbReleaseDate {
+  date?: number;
+  date_format?: number;
+  platform?: number;
+  release_region?: number;
+}
+
+/**
+ * La salida en PlayStation que cuenta: la primera de Europa en PS4/PS5 (o VR) y,
+ * si no hay, la primera mundial. Con `from`, solo las de esa fecha en adelante.
+ */
+function psRelease(rows: IgdbReleaseDate[], from?: number): IgdbReleaseDate | null {
+  const ps = rows.filter(r => r.platform != null && PLATFORM_BY_ID.has(r.platform) && (from == null || (r.date ?? 0) >= from));
+  for (const region of [REGION_EUROPE, REGION_WORLDWIDE]) {
+    const inRegion = ps.filter(r => r.release_region === region).sort((a, b) => (a.date ?? Infinity) - (b.date ?? Infinity));
+    if (inRegion.length) return inRegion[0];
+  }
+  return null;
+}
+
+/**
+ * Lo que sale en PS4/PS5 entre dos fechas (unix), un elemento por juego. Solo
+ * juegos que se compran (sin DLC ni temporadas). Unos cientos en 6 meses: 1-3
+ * llamadas.
+ */
+export async function releaseCalendar(env: IgdbEnv, from: number, to: number): Promise<IgdbRelease[]> {
+  type Row = IgdbReleaseDate & {
+    game?: { id: number; name: string; game_type?: number; hypes?: number; cover?: { image_id: string };
+      franchises?: { name: string }[]; collections?: { name: string }[] };
+  };
+  const rows: Row[] = [];
+  for (let offset = 0; offset < 3000; offset += 500) {
+    const page = await query<Row>(env, 'release_dates',
+      'fields date,date_format,platform,release_region,game.name,game.game_type,game.hypes,game.cover.image_id,' +
+      'game.franchises.name,game.collections.name; ' +
+      `where platform = (${PS_IDS}) & date >= ${Math.trunc(from)} & date < ${Math.trunc(to)} ` +
+      `& release_region = (${REGION_EUROPE},${REGION_WORLDWIDE}) & game.game_type = (${GAME_TYPES}); ` +
+      `sort date asc; limit 500; offset ${offset};`);
+    rows.push(...page);
+    if (page.length < 500) break;
+  }
+
+  const byGame = new Map<number, Row[]>();
+  for (const r of rows) if (r.game) byGame.set(r.game.id, [...(byGame.get(r.game.id) ?? []), r]);
+  const out: IgdbRelease[] = [];
+  for (const list of byGame.values()) {
+    const g = list[0].game!;
+    const rel = psRelease(list);
+    if (!rel) continue;
+    out.push({
+      igdb_id: g.id,
+      title: g.name,
+      cover_url: cover(g.cover),
+      platforms: psPlatforms(list.map(r => r.platform!).filter(p => p != null)),
+      date: isoDate(rel.date),
+      precision: rel.date_format ?? 0,
+      hypes: g.hypes ?? 0,
+      kind: g.game_type != null ? GAME_TYPE_LABEL[g.game_type] ?? null : null,
+      sagas: [...(g.franchises ?? []), ...(g.collections ?? [])].map(x => x.name),
+    });
+  }
+  return out.sort((a, b) => (a.date ?? '9999').localeCompare(b.date ?? '9999'));
+}
+
+/**
+ * Ficha y salida en PlayStation de varios juegos (los de "Lo quiero"): la
+ * próxima salida desde hace un mes (un retraso o la de Europa, que va detrás) y,
+ * si ya salió todo, la primera. Hasta 500 juegos por llamada.
+ */
+export async function releaseInfo(env: IgdbEnv, igdbIds: number[]): Promise<IgdbRelease[]> {
+  const ids = [...new Set(igdbIds.filter(n => Number.isInteger(n) && n > 0))];
+  const out: IgdbRelease[] = [];
+  type G = IgdbGame & { hypes?: number; release_dates?: IgdbReleaseDate[] };
+  for (let i = 0; i < ids.length; i += 500) {
+    const rows = await query<G>(env, 'games',
+      'fields name,game_type,hypes,cover.image_id,platforms,first_release_date,franchises.name,collections.name,' +
+      'release_dates.date,release_dates.date_format,release_dates.platform,release_dates.release_region; ' +
+      `where id = (${ids.slice(i, i + 500).join(',')}); limit 500;`);
+    const monthAgo = Math.floor(Date.now() / 1000) - 30 * 86400;
+    for (const g of rows) {
+      const rel = psRelease(g.release_dates ?? [], monthAgo) ?? psRelease(g.release_dates ?? []);
+      out.push({
+        igdb_id: g.id,
+        title: g.name,
+        cover_url: cover(g.cover),
+        platforms: psPlatforms(g.platforms),
+        date: rel ? isoDate(rel.date) : isoDate(g.first_release_date),
+        precision: rel ? rel.date_format ?? 0 : g.first_release_date ? 0 : 7,
+        hypes: g.hypes ?? 0,
+        kind: g.game_type != null ? GAME_TYPE_LABEL[g.game_type] ?? null : null,
+        sagas: [...(g.franchises ?? []), ...(g.collections ?? [])].map(x => x.name),
+      });
+    }
+  }
+  return out;
+}
