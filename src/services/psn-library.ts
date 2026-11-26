@@ -241,7 +241,7 @@ export function similarity(a: string, b: string): number {
  * dos), nombre alternativo exacto (títulos en castellano), y por último un
  * parecido alto de palabras.
  */
-async function matchIgdb(env: Env, name: string, platform: PsnPlatform, boughtYear: number | null): Promise<number | null> {
+export async function matchIgdb(env: Env, name: string, platform: string | null, boughtYear: number | null): Promise<number | null> {
   // Lo que salió después de comprarlo no puede ser ("Invasion!" de 2016 no es el "Invasion" de 2023);
   // un año de margen para las reservas.
   const possible = (r: IgdbSearchResult) => !boughtYear || !r.year || r.year <= boughtYear + 1;
@@ -252,7 +252,7 @@ async function matchIgdb(env: Env, name: string, platform: PsnPlatform, boughtYe
     const results = (await searchGames(env, v)).filter(possible);
     seen.push(...results);
     const exact = results.filter(r => titleKey(r.title) === titleKey(v));
-    if (exact.length) return (exact.find(r => r.platforms.includes(platform)) ?? exact[0]).igdb_id;
+    if (exact.length) return (exact.find(r => !!platform && (r.platforms as string[]).includes(platform)) ?? exact[0]).igdb_id;
   }
   const alt = await findByAlternativeName(env, name);
   if (alt.length) return alt[0];
@@ -260,7 +260,7 @@ async function matchIgdb(env: Env, name: string, platform: PsnPlatform, boughtYe
   let best: IgdbSearchResult | null = null;
   let score = 0;
   for (const r of seen) {
-    const s = Math.max(...variants.map(v => similarity(v, r.title))) + (r.platforms.includes(platform) ? 0.05 : 0);
+    const s = Math.max(...variants.map(v => similarity(v, r.title))) + (platform && (r.platforms as string[]).includes(platform) ? 0.05 : 0);
     if (s > score) { score = s; best = r; }
   }
   return best && score >= 0.6 ? best.igdb_id : null;

@@ -5,7 +5,7 @@ import { now, foldedLike } from '../db/helpers';
 import { searchGames, gameDetail, PS_PLATFORMS } from '../services/igdb';
 import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
-import { importCandidate, linkDlcs, PsnCopy, PsnDlc, readPsnLibrary, saveDlcs } from '../services/psn-library';
+import { importCandidate, linkDlcs, matchIgdb, PsnCopy, PsnDlc, readPsnLibrary, saveDlcs } from '../services/psn-library';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
 // edición). Ver migrations/0017_games.sql.
@@ -106,13 +106,37 @@ games.get('/barcode/:ean', async (c) => {
     // tiene en inglés, pero la parte de antes de los dos puntos suele bastar.
     const head = product.title.split(':')[0].trim();
     if (!results.length && head !== product.title && head.length >= 3) results = await searchGames(c.env, head);
+    // El juego que corresponde, si está claro: el mismo emparejador que la
+    // importación de PSN (variantes del nombre, nombres alternativos en
+    // castellano, plataforma, parecido). El front lo elige solo, como libros.
+    let best: number | null = null;
+    try {
+      best = await matchIgdb(c.env, product.name || product.title, product.platform, null);
+      if (best && !results.some(r => r.igdb_id === best)) {
+        const d = await gameDetail(c.env, best);
+        if (d) {
+          results.unshift({
+            igdb_id: d.igdb_id, title: d.title, cover_url: d.cover_url,
+            year: d.first_release_date ? Number(d.first_release_date.slice(0, 4)) : null,
+            platforms: d.platforms, kind: null,
+          });
+        } else {
+          best = null;
+        }
+      }
+    } catch (err) {
+      console.error('emparejar código con IGDB:', err);
+    }
     const ids = results.map(r => r.igdb_id);
     const local = ids.length
       ? await c.env.DB.prepare(`SELECT id, igdb_id FROM games WHERE igdb_id IN (${ids.map(() => '?').join(',')})`)
           .bind(...ids).all<{ id: number; igdb_id: number }>()
       : { results: [] };
     const map = new Map(local.results.map(r => [r.igdb_id, r.id]));
-    return c.json({ ean, owned: null, product, data: results.map(r => ({ ...r, local_id: map.get(r.igdb_id) ?? null })) });
+    return c.json({
+      ean, owned: null, product, best,
+      data: results.map(r => ({ ...r, local_id: map.get(r.igdb_id) ?? null })),
+    });
   } catch (err) {
     // Sin IGDB aún sirve el nombre del producto para buscarlo o darlo de alta a mano.
     return c.json({ ean, owned: null, product, data: [], error: String(err instanceof Error ? err.message : err) });
