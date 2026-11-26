@@ -424,7 +424,7 @@ stats.get('/dashboard/games', async (c) => {
   const ADDED = `(SELECT COALESCE((SELECT MIN(acquired_at) FROM game_copies WHERE game_id = g.id), g.created_at) AS d FROM games g)`;
   const empty = Promise.resolve({ results: [] as { month: string; count: number }[] });
 
-  const [totals, formats, byPlatform, genreRows, monthlyAdded, monthlyCompleted, recent, spent, thisYear, prevYear] = await Promise.all([
+  const [totals, formats, byPlatform, genreRows, monthlyAdded, monthlyCompleted, recent, spent, thisYear, prevYear, statusFormats] = await Promise.all([
     db.prepare(`
       SELECT COUNT(*) AS games,
         SUM(status = 'completed') AS completed, SUM(status = 'playing') AS playing,
@@ -460,6 +460,12 @@ stats.get('/dashboard/games', async (c) => {
         (SELECT COUNT(*) FROM ${ADDED} WHERE strftime('%Y', d) = strftime('%Y', 'now', '-1 year')) AS added,
         (SELECT COUNT(*) FROM games WHERE status = 'completed' AND strftime('%Y', completed_at) = strftime('%Y', 'now', '-1 year')) AS completed`)
       .first<{ added: number; completed: number }>(),
+    // Por estado, cuántos tienen copia física y cuántos digital (uno con las dos cuenta en ambos).
+    db.prepare(`
+      SELECT g.status,
+        SUM(EXISTS (SELECT 1 FROM game_copies WHERE game_id = g.id AND format = 'physical')) AS physical,
+        SUM(EXISTS (SELECT 1 FROM game_copies WHERE game_id = g.id AND format = 'digital')) AS digital
+      FROM games g GROUP BY g.status`).all<{ status: string; physical: number; digital: number }>(),
   ]);
 
   const PLATFORM_ORDER = ['PS1', 'PS2', 'PS3', 'PS4', 'PS5', 'PSP'];
@@ -480,6 +486,7 @@ stats.get('/dashboard/games', async (c) => {
       physical: fmt('physical').games,
       digital: fmt('digital').games,
     },
+    byStatusFormat: Object.fromEntries(statusFormats.results.map(r => [r.status, { physical: r.physical, digital: r.digital }])),
     monthly: { added: monthlyAdded.results, completed: monthlyCompleted.results },
     byPlatform: byPlatform.results.sort((a, b) => PLATFORM_ORDER.indexOf(a.platform) - PLATFORM_ORDER.indexOf(b.platform)),
     byGenre: [...genreCount.entries()].map(([genre, count]) => ({ genre, count }))

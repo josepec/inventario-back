@@ -76,6 +76,9 @@ export interface TrophySyncResult {
   lists: number;
   linked: number;
   platinumsApplied: number;
+  /** Listas a las que se les ha sacado la fecha del primer trofeo, y las que faltan. */
+  firstDates: number;
+  firstDatesPending: number;
 }
 
 /**
@@ -237,13 +240,80 @@ export async function syncTrophies(env: Env): Promise<TrophySyncResult> {
 
   const linked = await autoLink(env);
   const platinumsApplied = await applyPlatinums(env.DB);
+  const first = await fillFirstTrophies(env.DB, token);
   await env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('trophies_synced_at', datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
-  return { lists: rows.length, linked, platinumsApplied };
+  return { lists: rows.length, linked, platinumsApplied, firstDates: first.done, firstDatesPending: first.pending };
 }
 
 /** Tras dar de alta un juego: le busca listas pendientes con su título (o los nombres que se den). */
 export async function linkListsToGame(env: Env, gameId: number, extraNames: string[] = []): Promise<void> {
   const n = await autoLink(env, gameId, extraNames);
   if (n) await applyPlatinums(env.DB);
+}
+
+// ── Fechas estimadas (migrations/0020) ──────────────────────────────────────
+
+/**
+ * Llamadas a PSN por sincronización: el plan gratuito deja 50 subpeticiones por
+ * invocación y la sincronización ya gasta unas pocas. La primera vez quedan
+ * listas por hacer; se terminan en las siguientes (cron diario o el botón).
+ */
+const FIRST_TROPHY_BATCH = 35;
+
+/**
+ * La fecha del primer trofeo de las listas vinculadas a un juego (solo con
+ * algún trofeo y sin fecha aún; no cambia, así que se pide una vez por lista).
+ * Con ellas, la fecha de compra estimada de las copias físicas que no la tienen.
+ */
+async function fillFirstTrophies(db: D1Database, token: string): Promise<{ done: number; pending: number }> {
+  const due = await db.prepare(`
+    SELECT id, np_communication_id AS np, np_service_name AS svc FROM game_trophy_lists
+    WHERE game_id IS NOT NULL AND first_earned_at IS NULL
+      AND earned_platinum + earned_gold + earned_silver + earned_bronze > 0
+    ORDER BY last_played_at DESC`).all<{ id: number; np: string; svc: string }>();
+
+  const batch = due.results.slice(0, FIRST_TROPHY_BATCH);
+  const found = (await Promise.all(batch.map(async l => {
+    const at = await firstEarned(token, l.np, l.svc).catch(err => { console.error('primer trofeo', l.np, err); return null; });
+    return at ? { id: l.id, at } : null;
+  }))).filter((x): x is { id: number; at: string } => !!x);
+
+  await db.batch([
+    ...(found.length ? [db.prepare(`
+      UPDATE game_trophy_lists SET first_earned_at = j.at
+      FROM (SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.at') AS at FROM json_each(?)) AS j
+      WHERE game_trophy_lists.id = j.id`).bind(JSON.stringify(found))] : []),
+    estimateAcquired(db),
+  ]);
+  return { done: found.length, pending: due.results.length - found.length };
+}
+
+async function firstEarned(token: string, np: string, svc: string): Promise<string | null> {
+  const res = await fetch(
+    `${PSN_API}/trophy/v1/users/me/npCommunicationIds/${encodeURIComponent(np)}/trophyGroups/all/trophies?npServiceName=${encodeURIComponent(svc)}`,
+    { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`PSN ${res.status}`);
+  const j = await res.json<{ trophies?: { earned?: boolean; earnedDateTime?: string }[] }>();
+  const dates = (j.trophies ?? []).filter(t => t.earned && t.earnedDateTime).map(t => t.earnedDateTime!).sort();
+  return sqlDate(dates[0] ?? null);
+}
+
+/**
+ * Copias físicas sin fecha de compra (o con una estimada): el primer trofeo de
+ * las listas de su juego en esa plataforma. Un disco de PS4 en la PS5 da trofeos
+ * de PS4, así que a una copia de PS5 le valen también las listas de PS4.
+ */
+function estimateAcquired(db: D1Database): D1PreparedStatement {
+  return db.prepare(`
+    UPDATE game_copies SET acquired_at = e.at, acquired_estimated = 1, updated_at = datetime('now')
+    FROM (
+      SELECT c.id, date(MIN(l.first_earned_at)) AS at
+      FROM game_copies c JOIN game_trophy_lists l ON l.game_id = c.game_id
+      WHERE c.format = 'physical' AND (c.acquired_at IS NULL OR c.acquired_estimated = 1)
+        AND l.first_earned_at IS NOT NULL
+        AND (instr(l.platforms, c.platform) > 0 OR (c.platform = 'PS5' AND instr(l.platforms, 'PS4') > 0))
+      GROUP BY c.id
+    ) AS e
+    WHERE game_copies.id = e.id AND game_copies.acquired_at IS NOT e.at`);
 }

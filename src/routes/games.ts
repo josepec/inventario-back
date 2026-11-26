@@ -487,8 +487,11 @@ games.put('/copies/:copyId{[0-9]+}', async (c) => {
   if ('error' in r) return c.json({ error: r.error }, 400);
   const res = await c.env.DB.prepare(`
     UPDATE game_copies SET platform=?, format=?, edition=?, ean=?, psn_title_id=?, psn_product_id=?, price=?,
-      store=?, acquired_at=?, is_free=?, source=?, notes=?, updated_at=? WHERE id = ?
-  `).bind(...r.values, now(), copyId).run();
+      store=?, acquired_at=?, is_free=?, source=?, notes=?, updated_at=?,
+      -- La fecha estimada por los trofeos deja de serlo si se cambia a mano (el SET ve los valores de antes).
+      acquired_estimated = CASE WHEN acquired_at IS ? THEN acquired_estimated ELSE 0 END
+    WHERE id = ?
+  `).bind(...r.values, now(), r.values[8], copyId).run();
   if (!res.meta.changes) return c.json({ error: 'No encontrada' }, 404);
   return c.json({ ok: true });
 });
