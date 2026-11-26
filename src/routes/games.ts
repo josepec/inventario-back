@@ -7,6 +7,7 @@ import { cleanEan, lookupGameBarcode } from '../services/game-barcode';
 import { applyPlatinums, linkListsToGame, syncTrophies } from '../services/trophies';
 import { gameCoverOptions } from '../services/game-covers';
 import { addToWishlist, annotatedCalendar, listWishlist } from '../services/game-releases';
+import { readPsnWishlist } from '../services/psn-wishlist';
 import { importCandidate, linkDlcs, matchIgdb, PsnCopy, PsnDlc, readPsnLibrary, saveDlcs } from '../services/psn-library';
 
 // Videojuegos: un juego (ficha de IGDB) con sus copias (plataforma + formato +
@@ -283,6 +284,17 @@ games.get('/releases', async (c) => {
   } catch (err) {
     console.error('calendario:', err);
     return c.json({ error: 'IGDB no responde' }, 502);
+  }
+});
+
+// GET /games/psn/wishlist — tus deseados de la PS Store, con su juego de IGDB,
+// para elegir cuáles pasar a "Lo quiero" (se añaden con POST /games/wishlist).
+games.get('/psn/wishlist', async (c) => {
+  try {
+    return c.json({ data: await readPsnWishlist(c.env) });
+  } catch (err) {
+    console.error('deseados PSN:', err);
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 502);
   }
 });
 
