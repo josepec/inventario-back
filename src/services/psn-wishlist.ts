@@ -18,6 +18,12 @@ import { PS_PLATFORMS, PsPlatform } from './igdb';
 
 const GRAPHQL = 'https://web.np.playstation.com/api/graphql/v1/op';
 const OPERATION = 'storeRetrieveWishlist';
+/**
+ * El hash que usa la web de verdad (sacado de su petición el 26/11/2026; la web
+ * imprime la consulta a su manera y no sale de calcularlo). Si Sony lo cambia,
+ * se prueban después las variantes calculadas y el log dice cuál valió.
+ */
+const KNOWN_HASH = '1fa88dd6c70279e3d914f7ba535b2558a7e45821d030cb2a63a8e450963d12c3';
 
 /** La consulta de la web, sin lo de precios (no hace falta y es igual de válida para el hash: se prueba también la original). */
 const QUERY_LINES = [
@@ -90,9 +96,11 @@ async function fetchWishlist(token: string): Promise<StoreProduct[]> {
     'Content-Type': 'application/json',
   };
   const tried: string[] = [];
-  const variants: [string, string][] = [['typename', print(withTypename(QUERY_LINES))], ['plain', print(QUERY_LINES)]];
+  const variants: [string, string | null][] = [
+    ['web', null], ['typename', print(withTypename(QUERY_LINES))], ['plain', print(QUERY_LINES)],
+  ];
   for (const [label, text] of variants) {
-    const hash = await sha256(text);
+    const hash = text == null ? KNOWN_HASH : await sha256(text);
     const qs = new URLSearchParams({
       operationName: OPERATION, variables: '{}',
       extensions: JSON.stringify({ persistedQuery: { version: 1, sha256Hash: hash } }),
@@ -104,6 +112,7 @@ async function fetchWishlist(token: string): Promise<StoreProduct[]> {
       return j.data.storeWishlistSecure;
     }
     tried.push(`${label} ${res.status} ${j?.errors?.map(e => e.message).join('; ') ?? ''}`.trim());
+    if (res.status === 401 || res.status === 403) break;   // el token no vale: no sirve seguir probando
   }
   // Último intento: la consulta entera (si la API no exige consultas registradas).
   const res = await fetch(GRAPHQL, {
