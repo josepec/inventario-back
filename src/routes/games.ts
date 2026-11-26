@@ -493,6 +493,46 @@ games.put('/copies/:copyId{[0-9]+}', async (c) => {
   return c.json({ ok: true });
 });
 
+// POST /games/:id/copies/move — { copy_ids, to, delete_empty }: pasar copias a
+// otro juego (la digital de PSN, dada de alta aparte, a la ficha de la Deluxe
+// física). Conservan su enlace con PSN, así que las compras siguen importadas.
+// Si este se queda sin copias y delete_empty, se borra; antes, sus DLC y listas
+// de trofeos pasan también al otro.
+games.post('/:id{[0-9]+}/copies/move', async (c) => {
+  const id = Number(c.req.param('id'));
+  const body = await c.req.json<Body>();
+  const to = Number(body.to);
+  const ids = Array.isArray(body.copy_ids) ? body.copy_ids.map(Number).filter(Number.isInteger) : [];
+  if (!ids.length) return c.json({ error: 'Elige qué copias mover' }, 400);
+  if (!Number.isInteger(to) || to === id) return c.json({ error: 'Elige otro juego' }, 400);
+  const target = await c.env.DB.prepare('SELECT id FROM games WHERE id = ?').bind(to).first();
+  if (!target) return c.json({ error: 'No encontrado' }, 404);
+
+  const t = now();
+  const moved = await c.env.DB.prepare(
+    'UPDATE game_copies SET game_id = ?, updated_at = ? WHERE game_id = ? AND id IN (SELECT value FROM json_each(?))'
+  ).bind(to, t, id, JSON.stringify(ids)).run();
+  const left = await c.env.DB.prepare('SELECT COUNT(*) AS n FROM game_copies WHERE game_id = ?').bind(id).first<{ n: number }>();
+
+  const deleted = !left?.n && body.delete_empty === true;
+  await c.env.DB.batch([
+    ...(deleted ? [
+      c.env.DB.prepare('UPDATE game_dlcs SET game_id = ? WHERE game_id = ?').bind(to, id),
+      c.env.DB.prepare('UPDATE game_trophy_lists SET game_id = ? WHERE game_id = ?').bind(to, id),
+      // Si el que se borra estaba pasado (p. ej. por el platino, que ya no se
+      // volverá a aplicar), el otro hereda el pasado con su fecha.
+      c.env.DB.prepare(`
+        UPDATE games SET status = 'completed', completed_at = o.completed_at, completed_source = o.completed_source
+        FROM (SELECT completed_at, completed_source FROM games WHERE id = ? AND status = 'completed') AS o
+        WHERE games.id = ? AND games.status != 'completed'
+      `).bind(id, to),
+      c.env.DB.prepare('DELETE FROM games WHERE id = ?').bind(id),
+    ] : [c.env.DB.prepare('UPDATE games SET updated_at = ? WHERE id = ?').bind(t, id)]),
+    c.env.DB.prepare('UPDATE games SET updated_at = ? WHERE id = ?').bind(t, to),
+  ]);
+  return c.json({ moved: moved.meta.changes, deleted });
+});
+
 // DELETE /games/copies/:copyId
 games.delete('/copies/:copyId{[0-9]+}', async (c) => {
   await c.env.DB.prepare('DELETE FROM game_copies WHERE id = ?').bind(Number(c.req.param('copyId'))).run();
