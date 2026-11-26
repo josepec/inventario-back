@@ -173,6 +173,31 @@ export async function findByAlternativeName(env: IgdbEnv, name: string): Promise
   return [...new Set(rows.map(r => r.game).filter((g): g is number => typeof g === 'number'))];
 }
 
+/**
+ * Nombres alternativos de varios juegos a la vez (abreviaturas, títulos en
+ * castellano: "Uncharted 2: El reino de los ladrones", "Skyrim", "GTA IV").
+ * Pocas llamadas: hasta 500 nombres por petición.
+ */
+export async function alternativeNames(env: IgdbEnv, igdbIds: number[]): Promise<Map<number, string[]>> {
+  const out = new Map<number, string[]>();
+  const ids = [...new Set(igdbIds.filter(n => Number.isInteger(n) && n > 0))];
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100).join(',');
+    for (let offset = 0; offset < 5000; offset += 500) {
+      const rows = await query<{ game?: number; name?: string }>(env, 'alternative_names',
+        `fields game,name; where game = (${chunk}); limit 500; offset ${offset};`);
+      for (const r of rows) {
+        if (typeof r.game !== 'number' || !r.name) continue;
+        const list = out.get(r.game) ?? [];
+        list.push(r.name);
+        out.set(r.game, list);
+      }
+      if (rows.length < 500) break;
+    }
+  }
+  return out;
+}
+
 export async function gameDetail(env: IgdbEnv, id: number): Promise<IgdbGameDetail | null> {
   const [g] = await query<IgdbGame>(env, 'games',
     'fields name,summary,url,first_release_date,cover.image_id,platforms,genres.name,' +

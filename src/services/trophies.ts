@@ -1,4 +1,5 @@
 import { Env } from '../types';
+import { alternativeNames } from './igdb';
 
 /**
  * Listas de trofeos de PSN → game_trophy_lists (migrations/0018).
@@ -77,31 +78,74 @@ export interface TrophySyncResult {
   platinumsApplied: number;
 }
 
-/** Enlaza las listas sin decidir cuyo título coincide con el de un juego. */
-async function autoLink(db: D1Database, onlyGameId?: number): Promise<number> {
+/**
+ * Enlaza las listas sin decidir cuyo título coincide con el de un juego: primero
+ * con su título; las que sigan sueltas, con sus nombres alternativos de IGDB
+ * (muchas listas de PSN van en castellano o abreviadas). Si una clave sirve
+ * para dos juegos de la colección, no se adivina cuál es.
+ */
+async function autoLink(env: Env, onlyGameId?: number, extraNames: string[] = []): Promise<number> {
+  const db = env.DB;
   const [lists, games] = await Promise.all([
     db.prepare('SELECT id, title FROM game_trophy_lists WHERE game_id IS NULL AND link_state IS NULL')
       .all<{ id: number; title: string }>(),
     (onlyGameId
-      ? db.prepare('SELECT id, title FROM games WHERE id = ?').bind(onlyGameId)
-      : db.prepare('SELECT id, title FROM games')
-    ).all<{ id: number; title: string }>(),
+      ? db.prepare('SELECT id, title, igdb_id FROM games WHERE id = ?').bind(onlyGameId)
+      : db.prepare('SELECT id, title, igdb_id FROM games')
+    ).all<{ id: number; title: string; igdb_id: number | null }>(),
   ]);
-  const byKey = new Map<string, number>();
-  for (const g of games.results) {
-    const k = titleKey(g.title);
-    // Dos juegos con el mismo título: no se adivina cuál es.
-    byKey.set(k, byKey.has(k) ? -1 : g.id);
+  if (!lists.results.length || !games.results.length) return 0;
+
+  const keyMap = (names: { id: number; name: string }[]) => {
+    const m = new Map<string, number>();
+    for (const n of names) {
+      const k = titleKey(n.name);
+      if (!k) continue;
+      const prev = m.get(k);
+      m.set(k, prev === undefined || prev === n.id ? n.id : -1);
+    }
+    return m;
+  };
+
+  const byTitle = keyMap(games.results.map(g => ({ id: g.id, name: g.title })));
+  const links = new Map<number, number>();
+  for (const l of lists.results) {
+    const id = byTitle.get(titleKey(l.title)) ?? 0;
+    if (id > 0) links.set(l.id, id);
   }
-  const links = lists.results
-    .map(l => ({ id: l.id, game_id: byKey.get(titleKey(l.title)) ?? 0 }))
-    .filter(l => l.game_id > 0);
-  if (!links.length) return 0;
+
+  const rest = lists.results.filter(l => !links.has(l.id));
+  const withIgdb = games.results.filter(g => g.igdb_id);
+  // Nombres de más del juego recién dado de alta: el del producto escaneado
+  // (Amazon.es lo da en castellano, como suelen ir las listas de PSN).
+  const extra = onlyGameId ? extraNames.map(name => ({ id: onlyGameId, name })) : [];
+  if (rest.length && (withIgdb.length || extra.length)) {
+    try {
+      const alt = withIgdb.length && env.IGDB_CLIENT_ID
+        ? await alternativeNames(env, withIgdb.map(g => g.igdb_id!)) : new Map<number, string[]>();
+      const byAlt = keyMap([
+        ...withIgdb.flatMap(g => (alt.get(g.igdb_id!) ?? []).map(name => ({ id: g.id, name }))),
+        ...extra,
+      ]);
+      for (const l of rest) {
+        const k = titleKey(l.title);
+        // El título de otro juego manda sobre el nombre alternativo de este.
+        if (byTitle.has(k)) continue;
+        const id = byAlt.get(k) ?? 0;
+        if (id > 0) links.set(l.id, id);
+      }
+    } catch (err) {
+      console.error('nombres alternativos de IGDB:', err);
+    }
+  }
+
+  if (!links.size) return 0;
   await db.prepare(`
     UPDATE game_trophy_lists SET game_id = j.game_id, link_state = 'auto'
     FROM (SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.game_id') AS game_id FROM json_each(?)) AS j
-    WHERE game_trophy_lists.id = j.id`).bind(JSON.stringify(links)).run();
-  return links.length;
+    WHERE game_trophy_lists.id = j.id`)
+    .bind(JSON.stringify([...links].map(([id, game_id]) => ({ id, game_id })))).run();
+  return links.size;
 }
 
 /**
@@ -191,15 +235,15 @@ export async function syncTrophies(env: Env): Promise<TrophySyncResult> {
       .bind(JSON.stringify(rows)).run();
   }
 
-  const linked = await autoLink(env.DB);
+  const linked = await autoLink(env);
   const platinumsApplied = await applyPlatinums(env.DB);
   await env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('trophies_synced_at', datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
   return { lists: rows.length, linked, platinumsApplied };
 }
 
-/** Tras dar de alta un juego: le busca listas pendientes con su título. */
-export async function linkListsToGame(env: Env, gameId: number): Promise<void> {
-  const n = await autoLink(env.DB, gameId);
+/** Tras dar de alta un juego: le busca listas pendientes con su título (o los nombres que se den). */
+export async function linkListsToGame(env: Env, gameId: number, extraNames: string[] = []): Promise<void> {
+  const n = await autoLink(env, gameId, extraNames);
   if (n) await applyPlatinums(env.DB);
 }

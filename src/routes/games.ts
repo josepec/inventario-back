@@ -308,6 +308,19 @@ games.get('/', async (c) => {
   return c.json({ data: rows.results.map(shapeGame), total: count?.count ?? 0, page, limit });
 });
 
+// PATCH /games/batch — { ids, status }: cambiar el estado de varios a la vez,
+// como en libros. La fecha de "pasado" la ponen los triggers de 0017.
+games.patch('/batch', async (c) => {
+  const body = await c.req.json<{ ids?: unknown[]; status?: string }>();
+  const ids = (body.ids ?? []).filter((x): x is number => Number.isInteger(x));
+  if (!ids.length) return c.json({ error: 'ids requeridos' }, 400);
+  if (!body.status || !STATUSES.includes(body.status)) return c.json({ error: 'Estado no válido' }, 400);
+  const r = await c.env.DB.prepare(
+    `UPDATE games SET status = ?, updated_at = ? WHERE id IN (SELECT value FROM json_each(?)) AND status != ?`
+  ).bind(body.status, now(), JSON.stringify(ids), body.status).run();
+  return c.json({ ok: true, updated: r.meta.changes ?? 0 });
+});
+
 // GET /games/:id — juego con sus copias
 games.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
@@ -377,7 +390,10 @@ games.post('/', async (c) => {
         .bind(gameId, listId).run();
       await applyPlatinums(c.env.DB);
     }
-    await linkListsToGame(c.env, gameId);
+    const extraNames = Array.isArray(body['extra_names'])
+      ? (body['extra_names'] as unknown[]).filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 5)
+      : [];
+    await linkListsToGame(c.env, gameId, extraNames);
     await linkDlcs(c.env.DB);
   } catch (err) {
     console.error('trofeos/DLC al dar de alta:', err);
